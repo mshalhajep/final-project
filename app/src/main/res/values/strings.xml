@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">LocalConnect</string>
+    <string name="app_title_ar">اتصال محلي</string>
+    <string name="app_tagline">محادثات وصوت وفيديو بدون إنترنت</string>
+</resources>

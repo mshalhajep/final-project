@@ -1,0 +1,6 @@
+{
+  "name": "LocalConnect",
+  "description": "Offline local Wi-Fi voice, video, rooms, and messaging app for multi-device communication without internet.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
