@@ -22,11 +22,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.network.VideoEngine
+
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 
 @Composable
 fun CameraPreviewSurface(
@@ -34,16 +42,33 @@ fun CameraPreviewSurface(
     modifier: Modifier = Modifier
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    val isFrontCamera by videoEngine.isFrontCamera.collectAsState()
+    val isCameraOff by videoEngine.isCameraOff.collectAsState()
+    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+
+    LaunchedEffect(isFrontCamera, isCameraOff, lifecycleOwner) {
+        if (!isCameraOff) {
+            previewViewRef?.let { pv ->
+                videoEngine.startCameraStream(lifecycleOwner, pv.surfaceProvider)
+            }
+        }
+    }
 
     AndroidView(
         factory = { ctx ->
-            val previewView = PreviewView(ctx).apply {
+            PreviewView(ctx).apply {
                 scaleType = PreviewView.ScaleType.FILL_CENTER
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                previewViewRef = this
+                if (!isCameraOff) {
+                    videoEngine.startCameraStream(lifecycleOwner, surfaceProvider)
+                }
             }
-            videoEngine.startCameraStream(lifecycleOwner, previewView.surfaceProvider)
-            previewView
         },
-        modifier = modifier
+        update = { previewView ->
+            previewViewRef = previewView
+        },
+        modifier = modifier.graphicsLayer(scaleX = if (isFrontCamera) -1f else 1f)
     )
 }
 

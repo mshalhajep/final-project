@@ -3,6 +3,7 @@ package com.example.ui.screens
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.launch
@@ -12,15 +13,21 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,6 +48,8 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FloatingActionButton
@@ -51,6 +60,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,6 +78,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.model.ChatMessage
 import com.example.model.Peer
 import com.example.model.RoomInfo
@@ -83,6 +95,7 @@ import com.example.ui.theme.PrimaryCyan
 import com.example.ui.theme.PrimaryPurple
 import com.example.ui.theme.SecondaryTeal
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
     messages: List<ChatMessage>,
@@ -111,10 +124,17 @@ fun ChatScreen(
     onSendFile: (Uri, String) -> Unit = { _, _ -> },
     onDownloadFile: (ChatMessage) -> Unit = {},
     onOpenFile: (ChatMessage) -> Unit = {},
-    onCallPeer: (Peer, Boolean) -> Unit
+    onCallPeer: (Peer, Boolean) -> Unit,
+    onEditMessage: (String, String) -> Unit = { _, _ -> },
+    onDeleteMessage: (String) -> Unit = {},
+    onForwardMessage: (ChatMessage, String, Boolean) -> Unit = { _, _, _ -> },
+    peers: List<Peer> = emptyList(),
+    rooms: List<RoomInfo> = emptyList()
 ) {
     val context = LocalContext.current
     var inputText by remember { mutableStateOf("") }
+    var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var forwardingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var selectedImageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
@@ -182,133 +202,163 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(messages.size) {
+    val isImeVisible = WindowInsets.isImeVisible
+
+    LaunchedEffect(messages.size, isImeVisible) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp)
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter
     ) {
-        // Chat Header Banner
-        ElevatedCard(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.elevatedCardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            ),
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 12.dp, bottom = 8.dp)
+                .fillMaxSize()
+                .widthIn(max = 760.dp)
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp)
         ) {
-            Row(
+            // Sleek, Compact Chat Header Banner
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(top = 4.dp, bottom = 4.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier.size(38.dp),
-                        contentAlignment = Alignment.Center
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
                     ) {
                         Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (isDirectChat && currentPeer != null) Color(currentPeer.avatarColor) else PrimaryCyan
-                                ),
+                            modifier = Modifier.size(32.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = if (isDirectChat) Icons.Default.Person else Icons.Default.Forum,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-                        if (isDirectChat && currentPeer != null) {
-                            UserStatusDot(
-                                status = currentPeer.userStatus,
-                                size = 11.dp,
-                                modifier = Modifier.align(Alignment.BottomEnd)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Column {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = if (isDirectChat && currentPeer != null) currentPeer.name else (currentRoomInfo?.name ?: "المحادثة العامة"),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isDirectChat && currentPeer != null) Color(currentPeer.avatarColor) else PrimaryCyan
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isDirectChat && currentPeer != null && !currentPeer.avatarUri.isNullOrBlank()) {
+                                    AsyncImage(
+                                        model = currentPeer.avatarUri,
+                                        contentDescription = currentPeer.name,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(CircleShape)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = if (isDirectChat) Icons.Default.Person else Icons.Default.Forum,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
                             if (isDirectChat && currentPeer != null) {
-                                UserStatusBadge(status = currentPeer.userStatus, compact = true)
+                                UserStatusDot(
+                                    status = currentPeer.userStatus,
+                                    size = 9.dp,
+                                    modifier = Modifier.align(Alignment.BottomEnd)
+                                )
                             }
                         }
-                        if (activeTypingPeers.isNotEmpty()) {
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Text(
-                                    text = if (isDirectChat) "يكتب الآن..." else "${activeTypingPeers.first().peerName} يكتب الآن...",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = PrimaryPurple,
-                                    fontWeight = FontWeight.Bold
+                                    text = if (isDirectChat && currentPeer != null) currentPeer.name else (currentRoomInfo?.name ?: "المحادثة العامة"),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
                                 )
-                                TypingDotsAnimation(
-                                    dotSize = 3.5.dp,
-                                    dotColor = PrimaryPurple,
-                                    spacing = 2.dp
+                                if (isDirectChat && currentPeer != null) {
+                                    UserStatusBadge(status = currentPeer.userStatus, compact = true)
+                                }
+                            }
+                            if (activeTypingPeers.isNotEmpty()) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = if (isDirectChat) "يكتب..." else "${activeTypingPeers.first().peerName} يكتب...",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = PrimaryPurple,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                    TypingDotsAnimation(
+                                        dotSize = 3.dp,
+                                        dotColor = PrimaryPurple,
+                                        spacing = 1.5.dp
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = if (isDirectChat && currentPeer != null && currentPeer.statusMessage.isNotBlank())
+                                        currentPeer.statusMessage
+                                    else if (isDirectChat)
+                                        "محادثة مباشرة مشفرة"
+                                    else
+                                        "محادثة الغرفة الجماعية",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
                                 )
                             }
-                        } else {
-                            Text(
-                                text = if (isDirectChat && currentPeer != null && currentPeer.statusMessage.isNotBlank())
-                                    "\"${currentPeer.statusMessage}\""
-                                else if (isDirectChat)
-                                    "محادثة مشفرة مباشرة بدون إنترنت"
-                                else
-                                    "محادثة جماعية مفتوحة لأعضاء الغرفة",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
                         }
                     }
-                }
 
-                if (isDirectChat && currentPeer != null) {
-                    Row {
-                        IconButton(onClick = { onCallPeer(currentPeer, false) }) {
-                            Icon(
-                                imageVector = Icons.Default.Phone,
-                                contentDescription = "Audio call",
-                                tint = PrimaryCyan
-                            )
-                        }
-                        IconButton(onClick = { onCallPeer(currentPeer, true) }) {
-                            Icon(
-                                imageVector = Icons.Default.Videocam,
-                                contentDescription = "Video call",
-                                tint = SecondaryTeal
-                            )
+                    if (isDirectChat && currentPeer != null) {
+                        Row {
+                            IconButton(
+                                onClick = { onCallPeer(currentPeer, false) },
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Phone,
+                                    contentDescription = "Audio call",
+                                    tint = PrimaryCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { onCallPeer(currentPeer, true) },
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Videocam,
+                                    contentDescription = "Video call",
+                                    tint = SecondaryTeal,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
 
         // Messages List
         Box(
@@ -362,10 +412,155 @@ fun ChatScreen(
                             voiceNoteProgress = voiceNoteProgress,
                             voiceNoteCurrentMs = voiceNoteCurrentMs,
                             onTogglePlayVoiceNote = onTogglePlayVoiceNote,
-                            onSeekVoiceNote = onSeekVoiceNote
+                            onSeekVoiceNote = onSeekVoiceNote,
+                            onEditClick = { msg -> editingMessage = msg },
+                            onDeleteClick = { msg -> onDeleteMessage(msg.id) },
+                            onForwardClick = { msg -> forwardingMessage = msg }
                         )
                     }
                 }
+            }
+
+            if (forwardingMessage != null) {
+                val msgToForward = forwardingMessage!!
+                AlertDialog(
+                    onDismissRequest = { forwardingMessage = null },
+                    title = { Text("تحويل الرسالة إلى") },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 300.dp)
+                        ) {
+                            Text(
+                                text = "اختر الغرفة أو الجهاز المراد التحويل إليه:",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                onForwardMessage(msgToForward, "general", false)
+                                                forwardingMessage = null
+                                                Toast.makeText(context, "تم تحويل الرسالة للغرفة العامة", Toast.LENGTH_SHORT).show()
+                                            }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.Forum, contentDescription = null, tint = PrimaryPurple)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("الغرفة العامة (General)", fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                                items(rooms.filter { it.id != "general" }) { room ->
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                onForwardMessage(msgToForward, room.id, false)
+                                                forwardingMessage = null
+                                                Toast.makeText(context, "تم تحويل الرسالة إلى ${room.name}", Toast.LENGTH_SHORT).show()
+                                            }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.Forum, contentDescription = null, tint = PrimaryPurple)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(room.name, fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                                items(peers) { peer ->
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                onForwardMessage(msgToForward, peer.id, true)
+                                                forwardingMessage = null
+                                                Toast.makeText(context, "تم تحويل الرسالة إلى ${peer.name}", Toast.LENGTH_SHORT).show()
+                                            }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color(peer.avatarColor)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = peer.name.take(1).uppercase(),
+                                                    color = Color.White,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(peer.name, fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { forwardingMessage = null }) {
+                            Text("إلغاء")
+                        }
+                    }
+                )
+            }
+
+            if (editingMessage != null) {
+                var editContent by remember(editingMessage) { mutableStateOf(editingMessage?.content ?: "") }
+                AlertDialog(
+                    onDismissRequest = { editingMessage = null },
+                    title = { Text("تعديل الرسالة") },
+                    text = {
+                        OutlinedTextField(
+                            value = editContent,
+                            onValueChange = { editContent = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("الرسالة الجديدة") }
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (editContent.isNotBlank() && editingMessage != null) {
+                                    onEditMessage(editingMessage!!.id, editContent)
+                                }
+                                editingMessage = null
+                            }
+                        ) {
+                            Text("حفظ")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { editingMessage = null }) {
+                            Text("إلغاء")
+                        }
+                    }
+                )
             }
 
             // Real-time Chat Typing Indicator Floating Pill
@@ -518,7 +713,7 @@ fun ChatScreen(
                 border = androidx.compose.foundation.BorderStroke(1.5.dp, AccentRose.copy(alpha = 0.5f)),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 88.dp)
+                    .padding(vertical = 4.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -628,9 +823,7 @@ fun ChatScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .padding(vertical = 4.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -746,4 +939,5 @@ fun ChatScreen(
             }
         }
     }
+}
 }

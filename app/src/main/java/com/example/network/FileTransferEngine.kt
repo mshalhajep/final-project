@@ -7,6 +7,7 @@ import android.provider.OpenableColumns
 import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import com.example.utils.StorageUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -44,6 +45,10 @@ class FileTransferEngine(private val context: Context) {
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
 
+    // High-performance chunk buffer: 512 KB for ultra-fast local Wi-Fi transfer (up to 100+ MB/s)
+    private val BUFFER_SIZE = 512 * 1024
+    private val SOCKET_BUFFER_SIZE = 4 * 1024 * 1024 // 4 MB socket buffer for max throughput
+
     // Map of fileId -> File on local storage
     private val sharedFilesMap = ConcurrentHashMap<String, File>()
 
@@ -70,9 +75,11 @@ class FileTransferEngine(private val context: Context) {
                 serverSocket?.close()
                 serverSocket = ServerSocket().apply {
                     reuseAddress = true
+                    receiveBufferSize = SOCKET_BUFFER_SIZE
+                    setPerformancePreferences(0, 1, 2)
                     bind(InetSocketAddress(NetworkUtils.FILE_PORT))
                 }
-                Log.d(TAG, "P2P File Server listening on port ${NetworkUtils.FILE_PORT}")
+                Log.d(TAG, "P2P Ultra-Fast File Server listening on port ${NetworkUtils.FILE_PORT}")
 
                 while (isActive) {
                     try {
@@ -91,38 +98,54 @@ class FileTransferEngine(private val context: Context) {
     }
 
     /**
-     * Handles an incoming TCP request from a peer wanting to download a file.
+     * Handles an incoming TCP request from a peer wanting to download or resume a file.
+     * Protocol: DOWNLOAD <fileId> [offset]
      */
     private fun handleClientDownloadRequest(socket: Socket) {
         try {
-            socket.soTimeout = 30000
+            socket.tcpNoDelay = true
+            socket.trafficClass = 0x08 // IPTOS_THROUGHPUT (Maximize Network Throughput)
+            socket.setPerformancePreferences(0, 1, 2)
+            socket.sendBufferSize = SOCKET_BUFFER_SIZE
+            socket.receiveBufferSize = SOCKET_BUFFER_SIZE
+            socket.soTimeout = 45000
+
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             val requestLine = reader.readLine() ?: return
 
-            // Protocol: DOWNLOAD <fileId>
             val parts = requestLine.trim().split(" ")
             if (parts.size >= 2 && parts[0] == "DOWNLOAD") {
                 val fileId = parts[1]
+                val offset = if (parts.size >= 3) parts[2].toLongOrNull() ?: 0L else 0L
                 val file = sharedFilesMap[fileId]
 
-                val outStream = BufferedOutputStream(socket.getOutputStream())
+                val outStream = BufferedOutputStream(socket.getOutputStream(), BUFFER_SIZE)
 
                 if (file != null && file.exists()) {
-                    // Send header: OK <length> <fileName>
-                    val header = "OK ${file.length()} ${file.name}\n"
+                    val totalSize = file.length()
+                    // Send header: OK <totalSize> <fileName> <offset>
+                    val header = "OK $totalSize ${file.name} $offset\n"
                     outStream.write(header.toByteArray(Charsets.UTF_8))
                     outStream.flush()
 
-                    // Stream file bytes
-                    val fileIn = BufferedInputStream(FileInputStream(file))
-                    val buffer = ByteArray(32768)
+                    val fileIn = BufferedInputStream(FileInputStream(file), BUFFER_SIZE)
+                    if (offset > 0) {
+                        var skipped = 0L
+                        while (skipped < offset) {
+                            val count = fileIn.skip(offset - skipped)
+                            if (count <= 0) break
+                            skipped += count
+                        }
+                    }
+
+                    val buffer = ByteArray(BUFFER_SIZE)
                     var bytesRead: Int
                     while (fileIn.read(buffer).also { bytesRead = it } != -1) {
                         outStream.write(buffer, 0, bytesRead)
                     }
                     outStream.flush()
                     fileIn.close()
-                    Log.d(TAG, "Successfully transferred file: ${file.name} to ${socket.inetAddress.hostAddress}")
+                    Log.d(TAG, "Successfully served file: ${file.name} (from offset $offset/$totalSize) to ${socket.inetAddress.hostAddress}")
                 } else {
                     outStream.write("ERROR FILE_NOT_FOUND\n".toByteArray(Charsets.UTF_8))
                     outStream.flush()
@@ -165,7 +188,7 @@ class FileTransferEngine(private val context: Context) {
 
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(stagedFile).use { output ->
-                    input.copyTo(output)
+                    input.copyTo(output, BUFFER_SIZE)
                 }
             }
 
@@ -207,7 +230,7 @@ class FileTransferEngine(private val context: Context) {
     }
 
     /**
-     * Downloads a file directly from peer's IP via high-speed TCP socket.
+     * Downloads a file directly from peer's IP via ultra-fast TCP socket with auto-resumption support.
      */
     suspend fun downloadFileFromPeer(
         messageId: String,
@@ -218,20 +241,44 @@ class FileTransferEngine(private val context: Context) {
     ): File? = withContext(Dispatchers.IO) {
         var socket: Socket? = null
         try {
-            // Update downloading state
             _downloadingIds.value = _downloadingIds.value + messageId
-            _downloadProgressMap.value = _downloadProgressMap.value + (messageId to 0.05f)
 
-            socket = Socket()
+            val categoryDir = StorageUtils.getCategoryDir(context, fileName)
+            val destinationFile = File(categoryDir, fileName)
+
+            // If file is already fully downloaded and matches size, return it directly
+            if (destinationFile.exists() && expectedSize > 0 && destinationFile.length() == expectedSize) {
+                _downloadProgressMap.value = _downloadProgressMap.value + (messageId to 1.0f)
+                return@withContext destinationFile
+            }
+
+            // Check if there is a partial download in progress for resumption
+            val tempDir = File(context.cacheDir, "p2p_downloads_temp").apply { mkdirs() }
+            val partFile = File(tempDir, "${fileId}_${fileName}.part")
+            val existingBytes = if (partFile.exists()) partFile.length() else 0L
+
+            val initialProgress = if (expectedSize > 0 && existingBytes > 0) {
+                (existingBytes.toFloat() / expectedSize).coerceIn(0.01f, 0.99f)
+            } else 0.05f
+            _downloadProgressMap.value = _downloadProgressMap.value + (messageId to initialProgress)
+
+            socket = Socket().apply {
+                tcpNoDelay = true
+                trafficClass = 0x08 // IPTOS_THROUGHPUT
+                setPerformancePreferences(0, 1, 2)
+                sendBufferSize = SOCKET_BUFFER_SIZE
+                receiveBufferSize = SOCKET_BUFFER_SIZE
+                soTimeout = 45000
+            }
             socket.connect(InetSocketAddress(senderIp, NetworkUtils.FILE_PORT), 8000)
-            socket.soTimeout = 60000
 
-            val outStream = socket.getOutputStream()
-            val request = "DOWNLOAD $fileId\n"
+            val outStream = BufferedOutputStream(socket.getOutputStream(), BUFFER_SIZE)
+            // Send request with existing offset for resumption
+            val request = "DOWNLOAD $fileId $existingBytes\n"
             outStream.write(request.toByteArray(Charsets.UTF_8))
             outStream.flush()
 
-            val inStream = socket.getInputStream()
+            val inStream = BufferedInputStream(socket.getInputStream(), BUFFER_SIZE)
             val reader = BufferedReader(InputStreamReader(inStream))
             val responseHeader = reader.readLine() ?: throw Exception("Empty server response")
 
@@ -240,31 +287,30 @@ class FileTransferEngine(private val context: Context) {
                 throw Exception("Server rejected download: $responseHeader")
             }
 
-            val remoteSize = headerParts.getOrNull(1)?.toLongOrNull() ?: expectedSize
-            val cleanName = if (headerParts.size >= 3) headerParts.subList(2, headerParts.size).joinToString(" ") else fileName
+            val remoteTotalSize = headerParts.getOrNull(1)?.toLongOrNull() ?: expectedSize
+            val startOffset = if (headerParts.size >= 4) headerParts[3].toLongOrNull() ?: 0L else existingBytes
 
-            val downloadsDir = File(context.filesDir, "downloaded_files").apply { mkdirs() }
-            val destinationFile = File(downloadsDir, cleanName)
+            // Open part file in append mode if starting from offset > 0
+            val appendMode = startOffset > 0 && partFile.exists() && partFile.length() == startOffset
+            val fileOut = FileOutputStream(partFile, appendMode)
 
-            val fileOut = FileOutputStream(destinationFile)
-            val buffer = ByteArray(32768)
-            var totalRead = 0L
+            val buffer = ByteArray(BUFFER_SIZE)
+            var totalDownloaded = if (appendMode) startOffset else 0L
             var lastReportTime = System.currentTimeMillis()
 
-            // Note: Use inStream directly (or wrap appropriately)
             var bytesRead: Int
             while (inStream.read(buffer).also { bytesRead = it } != -1) {
                 fileOut.write(buffer, 0, bytesRead)
-                totalRead += bytesRead
+                totalDownloaded += bytesRead
 
                 val now = System.currentTimeMillis()
-                if (now - lastReportTime > 100 || totalRead >= remoteSize) {
+                if (now - lastReportTime > 80 || (remoteTotalSize > 0 && totalDownloaded >= remoteTotalSize)) {
                     lastReportTime = now
-                    val progress = if (remoteSize > 0) (totalRead.toFloat() / remoteSize).coerceIn(0f, 1f) else 0.5f
+                    val progress = if (remoteTotalSize > 0) (totalDownloaded.toFloat() / remoteTotalSize).coerceIn(0f, 1f) else 0.5f
                     _downloadProgressMap.value = _downloadProgressMap.value + (messageId to progress)
                 }
 
-                if (remoteSize > 0 && totalRead >= remoteSize) {
+                if (remoteTotalSize > 0 && totalDownloaded >= remoteTotalSize) {
                     break
                 }
             }
@@ -272,8 +318,24 @@ class FileTransferEngine(private val context: Context) {
             fileOut.flush()
             fileOut.close()
 
+            // When completely downloaded, rename from .part to final destination in LocalConnect directory
+            if (partFile.exists()) {
+                if (destinationFile.exists()) {
+                    destinationFile.delete()
+                }
+                val moved = partFile.renameTo(destinationFile)
+                if (!moved) {
+                    partFile.copyTo(destinationFile, overwrite = true)
+                    partFile.delete()
+                }
+            }
+
+            // Scan file with MediaScanner to immediately show in Gallery / Files
+            val mime = getMimeTypeFromFileName(destinationFile.name)
+            StorageUtils.scanFile(context, destinationFile, mime)
+
             _downloadProgressMap.value = _downloadProgressMap.value + (messageId to 1.0f)
-            Log.d(TAG, "Downloaded file successfully: ${destinationFile.absolutePath} ($totalRead bytes)")
+            Log.d(TAG, "Downloaded file successfully: ${destinationFile.absolutePath} ($totalDownloaded bytes)")
 
             destinationFile
         } catch (e: Exception) {
@@ -337,12 +399,45 @@ class FileTransferEngine(private val context: Context) {
         }
     }
 
-    private fun getMimeTypeFromFileName(fileName: String): String {
+    fun getMimeTypeFromFileName(fileName: String): String {
         val extension = fileName.substringAfterLast('.', "").lowercase()
-        return if (extension.isNotEmpty()) {
-            MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
-        } else {
-            "*/*"
+        if (extension.isEmpty()) return "*/*"
+
+        // Explicit lookup for common specialized Android and multimedia formats
+        return when (extension) {
+            "apk" -> "application/vnd.android.package-archive"
+            "xapk", "apks" -> "application/octet-stream"
+            "obb" -> "application/octet-stream"
+            "zip" -> "application/zip"
+            "rar" -> "application/x-rar-compressed"
+            "7z" -> "application/x-7z-compressed"
+            "tar" -> "application/x-tar"
+            "gz", "gzip" -> "application/gzip"
+            "pdf" -> "application/pdf"
+            "doc", "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            "xls", "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "ppt", "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            "txt" -> "text/plain"
+            "csv" -> "text/csv"
+            "json" -> "application/json"
+            "mp4" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "avi" -> "video/x-msvideo"
+            "mov" -> "video/quicktime"
+            "webm" -> "video/webm"
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "wav" -> "audio/wav"
+            "ogg" -> "audio/ogg"
+            "flac" -> "audio/flac"
+            "aac" -> "audio/aac"
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            "gif" -> "image/gif"
+            "svg" -> "image/svg+xml"
+            "iso", "bin", "img", "dat" -> "application/octet-stream"
+            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
         }
     }
 

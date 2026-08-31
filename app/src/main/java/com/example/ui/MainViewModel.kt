@@ -27,10 +27,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import android.net.Uri
+import android.util.Log
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -47,9 +50,25 @@ sealed interface AuthState {
     data class LoggedIn(val profile: UserProfile) : AuthState
 }
 
+sealed interface NetworkStatusState {
+    object Connected : NetworkStatusState
+    data class Unstable(val reason: String) : NetworkStatusState
+    object Disconnected : NetworkStatusState
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val engine = LocalP2PEngine(application.applicationContext)
+
+    private val _networkStatus = MutableStateFlow<NetworkStatusState>(NetworkStatusState.Connected)
+    val networkStatus = _networkStatus.asStateFlow()
+
+    private val _isNotificationMuted = MutableStateFlow(false)
+    val isNotificationMuted = _isNotificationMuted.asStateFlow()
+
+    fun toggleNotificationMute() {
+        _isNotificationMuted.value = !_isNotificationMuted.value
+    }
 
     private val db = Room.databaseBuilder(
         application.applicationContext,
@@ -113,6 +132,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val userProfile = engine.userProfile
     val localIp = engine.localIp
     val activeCall = engine.activeCall
+    val activeGroupCall = engine.activeGroupCall
+    val incomingGroupCallInvite = engine.incomingGroupCallInvite
     val callSignalInfo = engine.callSignalInfo
     val micLevel = engine.audioEngine.micLevel
     val isMuted = engine.audioEngine.isMuted
@@ -149,6 +170,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
+        // Monitor network connection and signal stability
+        viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                val ip = engine.localIp.value
+                val isNetworkActive = com.example.network.NetworkUtils.isLocalNetworkActive(getApplication<Application>().applicationContext)
+                val signal = engine.callSignalInfo.value
+
+                val newStatus = when {
+                    !isNetworkActive || ip == "127.0.0.1" -> NetworkStatusState.Disconnected
+                    signal?.quality == com.example.model.ConnectionQualityLevel.POOR ||
+                    signal?.quality == com.example.model.ConnectionQualityLevel.DISCONNECTED -> 
+                        NetworkStatusState.Unstable("اتصال غير مستقر (إشارة ضعيفة)")
+                    else -> NetworkStatusState.Connected
+                }
+                _networkStatus.value = newStatus
+                delay(3000L)
+            }
+        }
+
         // Collect saved theme mode preference from DataStore
         viewModelScope.launch {
             themePreferencesRepository.themeModeFlow.collectLatest { mode ->
@@ -190,8 +230,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 )
 
-                // Auto-download small voice notes from peer for instant listening
-                if (msg.messageType == MessageType.VOICE_NOTE && msg.fileId != null && msg.senderIp != null) {
+                // Auto-download voice notes and images from peer for instant listening/viewing
+                if ((msg.messageType == MessageType.VOICE_NOTE || msg.messageType == MessageType.IMAGE) && msg.fileId != null && msg.senderIp != null) {
                     downloadMessageFile(msg)
                 }
             }
@@ -212,6 +252,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun observeCurrentChatMessages() {
         viewModelScope.launch(Dispatchers.IO) {
             _currentChatTarget.collectLatest { targetId ->
+                chatDao.markMessagesAsRead(targetId)
                 chatDao.getMessagesForTarget(targetId).collectLatest { entities ->
                     _messages.value = entities.map {
                         ChatMessage(
@@ -233,7 +274,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             durationSeconds = it.durationSeconds,
                             senderIp = it.senderIp,
                             localFilePath = it.localFilePath,
-                            isDownloaded = it.isDownloaded || it.isMine
+                            isDownloaded = it.isDownloaded || it.isMine,
+                            isRead = it.isRead,
+                            isEdited = it.isEdited
                         )
                     }
                 }
@@ -244,6 +287,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun observeActiveRoomMessages() {
         viewModelScope.launch(Dispatchers.IO) {
             engine.currentRoom.collectLatest { roomId ->
+                if (roomId.isNotBlank()) {
+                    chatDao.markMessagesAsRead(roomId)
+                }
                 chatDao.getMessagesForTarget(roomId).collectLatest { entities ->
                     _inRoomMessages.value = entities.map {
                         ChatMessage(
@@ -265,7 +311,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             durationSeconds = it.durationSeconds,
                             senderIp = it.senderIp,
                             localFilePath = it.localFilePath,
-                            isDownloaded = it.isDownloaded || it.isMine
+                            isDownloaded = it.isDownloaded || it.isMine,
+                            isRead = it.isRead,
+                            isEdited = it.isEdited
                         )
                     }
                 }
@@ -289,6 +337,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 userStatus = userStatus,
                 statusMessage = activeUser.statusMessage,
                 bio = activeUser.bio,
+                avatarUri = activeUser.avatarUri,
                 isLoggedIn = true
             )
             engine.setUserProfile(profile)
@@ -375,6 +424,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 UserPresenceStatus.ONLINE
             }
+            val base64 = user.avatarBase64 ?: uriToBase64(user.avatarUri)
             val profile = UserProfile(
                 id = user.userId,
                 username = user.username,
@@ -383,6 +433,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 userStatus = userStatus,
                 statusMessage = user.statusMessage,
                 bio = user.bio,
+                avatarUri = user.avatarUri,
+                avatarBase64 = base64,
                 isLoggedIn = true
             )
             engine.setUserProfile(profile)
@@ -391,7 +443,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun register(usernameInput: String, passwordInput: String, displayNameInput: String, avatarColor: Long) {
+    fun register(usernameInput: String, passwordInput: String, displayNameInput: String, avatarColor: Long, avatarUri: String? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             _authError.value = null
             val username = usernameInput.trim().lowercase()
@@ -417,6 +469,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             chatDao.clearActiveSessions()
             val userId = UUID.randomUUID().toString().substring(0, 8)
             val passwordHash = hashPassword(password)
+            val base64 = uriToBase64(avatarUri)
             val newUser = UserAccountEntity(
                 userId = userId,
                 username = username,
@@ -426,6 +479,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 userStatus = UserPresenceStatus.ONLINE.name,
                 statusMessage = "متصل محلياً ومستعد للحديث",
                 bio = "مستخدم في تطبيق LocalConnect",
+                avatarUri = avatarUri,
+                avatarBase64 = base64,
                 createdAt = System.currentTimeMillis(),
                 isActiveSession = true
             )
@@ -439,6 +494,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 userStatus = UserPresenceStatus.ONLINE,
                 statusMessage = "متصل محلياً ومستعد للحديث",
                 bio = "مستخدم في تطبيق LocalConnect",
+                avatarUri = avatarUri,
+                avatarBase64 = base64,
                 isLoggedIn = true
             )
             engine.setUserProfile(profile)
@@ -566,21 +623,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun uriToBase64(uriString: String?): String? {
+        if (uriString.isNullOrBlank()) return null
+        return try {
+            val uri = android.net.Uri.parse(uriString)
+            val inputStream = getApplication<Application>().contentResolver.openInputStream(uri) ?: return null
+            val original = android.graphics.BitmapFactory.decodeStream(inputStream)
+            inputStream.close()
+            if (original == null) return null
+
+            val targetSize = 120
+            val scaled = Bitmap.createScaledBitmap(original, targetSize, targetSize, true)
+            val out = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 75, out)
+            val bytes = out.toByteArray()
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun updateProfile(
         name: String,
         color: Long,
         status: String = "",
         bio: String = "",
-        userStatus: UserPresenceStatus = userProfile.value.userStatus
+        userStatus: UserPresenceStatus = userProfile.value.userStatus,
+        avatarUri: String? = null
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             val current = userProfile.value
+            val finalAvatarUri = avatarUri ?: current.avatarUri
+            val finalAvatarBase64 = if (avatarUri != null && avatarUri != current.avatarUri) {
+                uriToBase64(avatarUri)
+            } else current.avatarBase64 ?: uriToBase64(finalAvatarUri)
+
             val updated = current.copy(
                 displayName = name,
                 avatarColor = color,
                 userStatus = userStatus,
                 statusMessage = status.ifBlank { current.statusMessage },
-                bio = bio.ifBlank { current.bio }
+                bio = bio.ifBlank { current.bio },
+                avatarUri = finalAvatarUri,
+                avatarBase64 = finalAvatarBase64
             )
             engine.setUserProfile(updated)
 
@@ -593,7 +678,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     avatarColor = color,
                     userStatus = userStatus.name,
                     statusMessage = status.ifBlank { activeUser.statusMessage },
-                    bio = bio.ifBlank { activeUser.bio }
+                    bio = bio.ifBlank { activeUser.bio },
+                    avatarUri = finalAvatarUri,
+                    avatarBase64 = finalAvatarBase64
                 )
             }
         }
@@ -628,7 +715,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         engine.videoEngine.switchCamera()
     }
 
-    // --- Calling Actions ---
+    // --- Calling Actions & In-Call Media Routing ---
 
     fun startCall(peer: Peer, isVideo: Boolean) {
         engine.startCall(peer, isVideo)
@@ -640,6 +727,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun endCall() {
         engine.endCall()
+    }
+
+    fun toggleCallMic() {
+        engine.toggleCallMic()
+    }
+
+    fun toggleCallCamera() {
+        engine.toggleCallCamera()
+    }
+
+    fun switchCallCamera() {
+        engine.switchCallCamera()
+    }
+
+    fun toggleCallSpeaker() {
+        engine.toggleCallSpeaker()
+    }
+
+    fun setCallVolume(volume: Float) {
+        engine.audioEngine.setCallVolume(volume)
+    }
+
+    val callVolume = engine.audioEngine.callVolume
+
+    fun startCallScreenShare(appName: String, frameProvider: () -> Bitmap?) {
+        engine.startCallScreenShare(appName, frameProvider)
+    }
+
+    fun sendCallScreenShareFrame(bitmap: Bitmap, appName: String) {
+        engine.sendCallScreenShareFrame(bitmap, appName)
+    }
+
+    fun stopCallScreenShare() {
+        engine.stopCallScreenShare()
+    }
+
+    // --- Group Video & Audio Call Actions ---
+
+    fun startGroupVideoCall(roomId: String, roomName: String) {
+        engine.startGroupVideoCall(roomId, roomName)
+    }
+
+    fun joinGroupVideoCall(invitation: com.example.model.GroupCallInvitation) {
+        engine.joinGroupVideoCall(invitation)
+    }
+
+    fun leaveGroupVideoCall() {
+        engine.leaveGroupVideoCall()
+    }
+
+    fun toggleGroupCallMic() {
+        engine.toggleGroupCallMic()
+    }
+
+    fun toggleGroupCallCamera() {
+        engine.toggleGroupCallCamera()
+    }
+
+    fun switchGroupCallCamera() {
+        engine.switchGroupCallCamera()
+    }
+
+    fun toggleGroupCallSpeaker() {
+        engine.toggleGroupCallSpeaker()
+    }
+
+    fun startGroupCallScreenShare(appName: String, frameProvider: () -> Bitmap?) {
+        engine.startGroupCallScreenShare(appName, frameProvider)
+    }
+
+    fun sendGroupCallScreenShareFrame(bitmap: Bitmap, appName: String) {
+        engine.sendGroupCallScreenShareFrame(bitmap, appName)
+    }
+
+    fun stopGroupCallScreenShare() {
+        engine.stopGroupCallScreenShare()
     }
 
     // --- Theme & Appearance Settings (DataStore Persistence) ---
@@ -691,18 +854,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendMessage(text: String, bitmap: Bitmap?) {
         onUserTyping(false)
+        if (bitmap != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val cacheFile = File(getApplication<android.app.Application>().cacheDir, "img_${System.currentTimeMillis()}.jpg")
+                    val stream = FileOutputStream(cacheFile)
+                    val maxDim = 800
+                    val scaledBmp = if (bitmap.width > maxDim || bitmap.height > maxDim) {
+                        val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
+                        val targetW = if (ratio >= 1f) maxDim else (maxDim * ratio).toInt()
+                        val targetH = if (ratio >= 1f) (maxDim / ratio).toInt() else maxDim
+                        Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+                    } else {
+                        bitmap
+                    }
+                    scaledBmp.compress(Bitmap.CompressFormat.JPEG, 75, stream)
+                    stream.flush()
+                    stream.close()
+                    val uri = Uri.fromFile(cacheFile)
+                    val isDirect = _currentChatIsDirect.value
+                    if (isDirect) {
+                        val peer = _currentChatPeer.value
+                        if (peer != null) {
+                            sendDirectFile(peer, uri, text)
+                        }
+                    } else {
+                        sendInRoomFile(uri, text)
+                    }
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Error sending image message", e)
+                }
+            }
+            return
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             val targetId = _currentChatTarget.value
             val isDirect = _currentChatIsDirect.value
             val currentProfile = userProfile.value
-
-            val imageBase64 = bitmap?.let { bmp ->
-                val stream = ByteArrayOutputStream()
-                bmp.compress(Bitmap.CompressFormat.JPEG, 70, stream)
-                Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
-            }
-
-            val messageType = if (bitmap != null) MessageType.IMAGE else MessageType.TEXT
 
             val msg = ChatMessage(
                 id = UUID.randomUUID().toString(),
@@ -714,8 +903,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 content = text,
                 timestamp = System.currentTimeMillis(),
                 isMine = true,
-                messageType = messageType,
-                imageBase64 = imageBase64
+                messageType = MessageType.TEXT
             )
 
             // Save to DB
@@ -730,8 +918,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     content = msg.content,
                     timestamp = msg.timestamp,
                     isMine = true,
-                    messageType = msg.messageType.name,
-                    imageBase64 = msg.imageBase64
+                    messageType = msg.messageType.name
                 )
             )
 
@@ -749,17 +936,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendInRoomMessage(text: String, bitmap: Bitmap?) {
         onUserTyping(false)
+        if (bitmap != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val cacheFile = File(getApplication<android.app.Application>().cacheDir, "img_${System.currentTimeMillis()}.jpg")
+                    val stream = FileOutputStream(cacheFile)
+                    val maxDim = 800
+                    val scaledBmp = if (bitmap.width > maxDim || bitmap.height > maxDim) {
+                        val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
+                        val targetW = if (ratio >= 1f) maxDim else (maxDim * ratio).toInt()
+                        val targetH = if (ratio >= 1f) (maxDim / ratio).toInt() else maxDim
+                        Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+                    } else {
+                        bitmap
+                    }
+                    scaledBmp.compress(Bitmap.CompressFormat.JPEG, 75, stream)
+                    stream.flush()
+                    stream.close()
+                    val uri = Uri.fromFile(cacheFile)
+                    sendInRoomFile(uri, text)
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Error sending room image", e)
+                }
+            }
+            return
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             val roomId = currentRoom.value
             val currentProfile = userProfile.value
-
-            val imageBase64 = bitmap?.let { bmp ->
-                val stream = ByteArrayOutputStream()
-                bmp.compress(Bitmap.CompressFormat.JPEG, 70, stream)
-                Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
-            }
-
-            val messageType = if (bitmap != null) MessageType.IMAGE else MessageType.TEXT
 
             val msg = ChatMessage(
                 id = UUID.randomUUID().toString(),
@@ -771,8 +976,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 content = text,
                 timestamp = System.currentTimeMillis(),
                 isMine = true,
-                messageType = messageType,
-                imageBase64 = imageBase64
+                messageType = MessageType.TEXT
             )
 
             // Save to DB
@@ -787,8 +991,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     content = msg.content,
                     timestamp = msg.timestamp,
                     isMine = true,
-                    messageType = msg.messageType.name,
-                    imageBase64 = msg.imageBase64
+                    messageType = msg.messageType.name
                 )
             )
 
@@ -1158,6 +1361,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun seekVoiceNote(progress: Float) {
         engine.voiceNotePlayer.seekTo(progress)
+    }
+
+    fun editMessage(messageId: String, newContent: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (newContent.isNotBlank()) {
+                chatDao.updateMessageContent(messageId, newContent.trim())
+            }
+        }
+    }
+
+    fun deleteMessage(messageId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDao.deleteMessage(messageId)
+        }
+    }
+
+    fun forwardMessage(message: ChatMessage, targetRoomOrPeerId: String, isDirect: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val currentProfile = userProfile.value
+            val newMsg = ChatMessage(
+                id = UUID.randomUUID().toString(),
+                senderId = currentProfile.id,
+                senderName = currentProfile.displayName.ifBlank { currentProfile.username },
+                senderColor = currentProfile.avatarColor,
+                targetRoomOrPeerId = targetRoomOrPeerId,
+                isDirect = isDirect,
+                content = message.content,
+                timestamp = System.currentTimeMillis(),
+                isMine = true,
+                messageType = message.messageType,
+                imageBase64 = message.imageBase64,
+                fileId = message.fileId,
+                fileName = message.fileName,
+                fileSize = message.fileSize,
+                mimeType = message.mimeType,
+                durationSeconds = message.durationSeconds,
+                senderIp = localIp.value,
+                localFilePath = message.localFilePath,
+                isDownloaded = true
+            )
+
+            // Save to DB
+            chatDao.insertMessage(
+                ChatMessageEntity(
+                    id = newMsg.id,
+                    senderId = newMsg.senderId,
+                    senderName = newMsg.senderName,
+                    senderColor = newMsg.senderColor,
+                    targetRoomOrPeerId = newMsg.targetRoomOrPeerId,
+                    isDirect = isDirect,
+                    content = newMsg.content,
+                    timestamp = newMsg.timestamp,
+                    isMine = true,
+                    messageType = newMsg.messageType.name,
+                    imageBase64 = newMsg.imageBase64,
+                    fileId = newMsg.fileId,
+                    fileName = newMsg.fileName,
+                    fileSize = newMsg.fileSize,
+                    mimeType = newMsg.mimeType,
+                    durationSeconds = newMsg.durationSeconds,
+                    senderIp = newMsg.senderIp,
+                    localFilePath = newMsg.localFilePath,
+                    isDownloaded = true
+                )
+            )
+
+            // Broadcast / Send
+            if (isDirect) {
+                val peer = discoveredPeers.value.find { it.id == targetRoomOrPeerId }
+                if (peer != null) {
+                    engine.sendDirectMessage(peer, newMsg)
+                }
+            } else {
+                engine.sendRoomMessage(targetRoomOrPeerId, newMsg)
+            }
+        }
     }
 
     override fun onCleared() {

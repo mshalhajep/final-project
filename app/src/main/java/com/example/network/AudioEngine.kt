@@ -29,6 +29,7 @@ class AudioEngine(private val context: Context) {
 
     companion object {
         private const val TAG = "AudioEngine"
+        // High-definition wideband audio (16kHz PCM 16-bit Mono)
         const val SAMPLE_RATE = 16000
         const val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO
         const val CHANNEL_OUT = AudioFormat.CHANNEL_OUT_MONO
@@ -79,6 +80,19 @@ class AudioEngine(private val context: Context) {
         }
     }
 
+    private val _callVolume = MutableStateFlow(1.0f)
+    val callVolume = _callVolume.asStateFlow()
+
+    fun setCallVolume(volume: Float) {
+        val clamped = volume.coerceIn(0f, 1f)
+        _callVolume.value = clamped
+        try {
+            audioTrack?.setVolume(clamped)
+        } catch (e: Exception) {
+            // Ignore
+        }
+    }
+
     fun toggleMute() {
         _isMuted.value = !_isMuted.value
     }
@@ -95,7 +109,14 @@ class AudioEngine(private val context: Context) {
     fun setSpeakerOn(speakerOn: Boolean) {
         _isSpeakerOn.value = speakerOn
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        audioManager?.isSpeakerphoneOn = speakerOn
+        audioManager?.let { am ->
+            try {
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                am.isSpeakerphoneOn = speakerOn
+            } catch (e: Exception) {
+                Log.e(TAG, "Error setting speakerphone state", e)
+            }
+        }
     }
 
     fun toggleOpenMic() {
@@ -123,11 +144,28 @@ class AudioEngine(private val context: Context) {
         activeTargetAddresses.clear()
     }
 
+    private fun configureAudioMode(active: Boolean) {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            if (active) {
+                audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
+                audioManager?.isSpeakerphoneOn = _isSpeakerOn.value
+            } else {
+                audioManager?.mode = AudioManager.MODE_NORMAL
+                audioManager?.isSpeakerphoneOn = false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to configure audio manager mode", e)
+        }
+    }
+
     /**
      * Start playing received audio from UDP socket.
      */
     fun startAudioPlayback() {
         if (playbackJob?.isActive == true) return
+
+        configureAudioMode(true)
 
         playbackJob = scope.launch {
             try {
@@ -136,7 +174,7 @@ class AudioEngine(private val context: Context) {
                     CHANNEL_OUT,
                     AUDIO_FORMAT
                 )
-                val bufferSize = (minBufferSize * 2).coerceAtLeast(FRAME_SIZE * 4)
+                val bufferSize = (minBufferSize * 4).coerceAtLeast(FRAME_SIZE * 8)
 
                 val audioAttributes = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -156,20 +194,23 @@ class AudioEngine(private val context: Context) {
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
 
+                audioTrack?.setVolume(_callVolume.value)
                 audioTrack?.play()
 
                 receiveSocket?.close()
-                receiveSocket = DatagramSocket(NetworkUtils.AUDIO_PORT)
-                receiveSocket?.reuseAddress = true
+                receiveSocket = DatagramSocket(NetworkUtils.AUDIO_PORT).apply {
+                    reuseAddress = true
+                    receiveBufferSize = 256 * 1024
+                }
 
-                val packetBuffer = ByteArray(FRAME_SIZE + HEADER_SIZE + 64)
+                val packetBuffer = ByteArray(FRAME_SIZE + HEADER_SIZE + 128)
                 val datagramPacket = DatagramPacket(packetBuffer, packetBuffer.size)
 
                 while (isActive) {
                     try {
                         receiveSocket?.receive(datagramPacket)
                         val length = datagramPacket.length
-                        if (length > HEADER_SIZE && _isSpeakerOn.value) {
+                        if (length > HEADER_SIZE) {
                             val pcmLength = length - HEADER_SIZE
                             audioTrack?.write(packetBuffer, HEADER_SIZE, pcmLength)
                         }
@@ -196,6 +237,8 @@ class AudioEngine(private val context: Context) {
     fun startAudioRecording(myId: String, currentRoom: String) {
         if (recordingJob?.isActive == true) return
 
+        configureAudioMode(true)
+
         recordingJob = scope.launch {
             try {
                 val minBufferSize = AudioRecord.getMinBufferSize(
@@ -203,7 +246,7 @@ class AudioEngine(private val context: Context) {
                     CHANNEL_IN,
                     AUDIO_FORMAT
                 )
-                val bufferSize = (minBufferSize * 2).coerceAtLeast(FRAME_SIZE * 4)
+                val bufferSize = (minBufferSize * 4).coerceAtLeast(FRAME_SIZE * 8)
 
                 audioRecord = AudioRecord(
                     MediaRecorder.AudioSource.VOICE_COMMUNICATION,
@@ -341,6 +384,7 @@ class AudioEngine(private val context: Context) {
     fun stopAllAudio() {
         stopAudioRecording()
         stopAudioPlayback()
+        configureAudioMode(false)
     }
 
     fun release() {

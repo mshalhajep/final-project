@@ -12,25 +12,26 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = PrimaryPurpleLight,
-    onPrimary = Color(0xFF381E72),
-    primaryContainer = Color(0xFF4F378B),
-    onPrimaryContainer = PrimaryContainerLight,
-    secondary = Color(0xFFCCC2DC),
-    onSecondary = Color(0xFF332D41),
-    secondaryContainer = Color(0xFF4A4458),
-    onSecondaryContainer = Color(0xFFE8DEF8),
-    tertiary = Color(0xFFEFB8C8),
-    onTertiary = Color(0xFF492532),
+    primary = PrimaryPurple,
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFF312E81),
+    onPrimaryContainer = Color(0xFFE0E7FF),
+    secondary = SecondarySlate,
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFF0C4A6E),
+    onSecondaryContainer = Color(0xFFBAE6FD),
+    tertiary = Color(0xFF8B5CF6),
+    onTertiary = Color.White,
     background = DarkBackground,
     onBackground = TextPrimaryDark,
     surface = DarkSurface,
     onSurface = TextPrimaryDark,
     surfaceVariant = DarkSurfaceVariant,
     onSurfaceVariant = TextSecondaryDark,
-    outline = Color(0xFF938F99),
-    error = Color(0xFFFFB4AB),
-    onError = Color(0xFF690005)
+    outline = Color(0xFF334155),
+    outlineVariant = Color(0xFF1E293B),
+    error = AccentRose,
+    onError = Color.White
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -42,7 +43,7 @@ private val LightColorScheme = lightColorScheme(
     onSecondary = Color.White,
     secondaryContainer = SecondaryContainerLight,
     onSecondaryContainer = OnSecondaryContainerLight,
-    tertiary = Color(0xFF7D5260),
+    tertiary = Color(0xFF8B5CF6),
     onTertiary = Color.White,
     background = LightBackground,
     onBackground = TextPrimaryLight,
@@ -50,8 +51,8 @@ private val LightColorScheme = lightColorScheme(
     onSurface = TextPrimaryLight,
     surfaceVariant = LightSurfaceVariant,
     onSurfaceVariant = TextSecondaryLight,
-    outline = Color(0xFF79747E),
-    outlineVariant = Color(0xFFCAC4D0),
+    outline = Color(0xFFCBD5E1),
+    outlineVariant = Color(0xFFE2E8F0),
     error = AccentRose,
     onError = Color.White
 )

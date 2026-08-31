@@ -31,7 +31,9 @@ data class ChatMessageEntity(
     val durationSeconds: Int = 0,
     val senderIp: String? = null,
     val localFilePath: String? = null,
-    val isDownloaded: Boolean = false
+    val isDownloaded: Boolean = false,
+    val isRead: Boolean = true,
+    val isEdited: Boolean = false
 )
 
 @Entity(tableName = "saved_rooms")
@@ -59,6 +61,8 @@ data class UserAccountEntity(
     val userStatus: String = "ONLINE",
     val statusMessage: String,
     val bio: String = "",
+    val avatarUri: String? = null,
+    val avatarBase64: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val isActiveSession: Boolean = false
 )
@@ -76,6 +80,15 @@ interface ChatDao {
 
     @Query("UPDATE chat_messages SET localFilePath = :localFilePath, isDownloaded = 1 WHERE id = :messageId")
     suspend fun updateMessageFileDownloaded(messageId: String, localFilePath: String)
+
+    @Query("UPDATE chat_messages SET isRead = 1 WHERE targetRoomOrPeerId = :targetId")
+    suspend fun markMessagesAsRead(targetId: String)
+
+    @Query("UPDATE chat_messages SET content = :newContent, isEdited = 1 WHERE id = :messageId")
+    suspend fun updateMessageContent(messageId: String, newContent: String)
+
+    @Query("DELETE FROM chat_messages WHERE id = :messageId")
+    suspend fun deleteMessage(messageId: String)
 
     @Query("DELETE FROM chat_messages WHERE targetRoomOrPeerId = :targetId")
     suspend fun deleteMessagesForTarget(targetId: String)
@@ -117,14 +130,14 @@ interface ChatDao {
     @Query("UPDATE user_accounts SET isActiveSession = 1 WHERE username = :username")
     suspend fun setActiveSession(username: String)
 
-    @Query("UPDATE user_accounts SET displayName = :displayName, avatarColor = :avatarColor, userStatus = :userStatus, statusMessage = :statusMessage, bio = :bio WHERE username = :username")
-    suspend fun updateProfile(username: String, displayName: String, avatarColor: Long, userStatus: String, statusMessage: String, bio: String)
+    @Query("UPDATE user_accounts SET displayName = :displayName, avatarColor = :avatarColor, userStatus = :userStatus, statusMessage = :statusMessage, bio = :bio, avatarUri = :avatarUri, avatarBase64 = :avatarBase64 WHERE username = :username")
+    suspend fun updateProfile(username: String, displayName: String, avatarColor: Long, userStatus: String, statusMessage: String, bio: String, avatarUri: String?, avatarBase64: String?)
 
     @Query("UPDATE user_accounts SET userStatus = :userStatus WHERE username = :username")
     suspend fun updateUserStatus(username: String, userStatus: String)
 }
 
-@Database(entities = [ChatMessageEntity::class, RoomEntity::class, UserAccountEntity::class], version = 3, exportSchema = false)
+@Database(entities = [ChatMessageEntity::class, RoomEntity::class, UserAccountEntity::class], version = 6, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
 }

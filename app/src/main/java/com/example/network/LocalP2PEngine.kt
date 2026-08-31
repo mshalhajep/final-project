@@ -5,6 +5,8 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
 import com.example.model.ActiveCall
+import com.example.model.ActiveGroupCall
+import com.example.model.GroupCallInvitation
 import com.example.model.CallState
 import com.example.model.ChatMessage
 import com.example.model.ConnectionQualityLevel
@@ -85,6 +87,12 @@ class LocalP2PEngine(private val context: Context) {
 
     private val _activeCall = MutableStateFlow<ActiveCall?>(null)
     val activeCall = _activeCall.asStateFlow()
+
+    private val _activeGroupCall = MutableStateFlow<ActiveGroupCall?>(null)
+    val activeGroupCall = _activeGroupCall.asStateFlow()
+
+    private val _incomingGroupCallInvite = MutableSharedFlow<GroupCallInvitation>(extraBufferCapacity = 16)
+    val incomingGroupCallInvite = _incomingGroupCallInvite.asSharedFlow()
 
     private var callQualityJob: Job? = null
     private val _callSignalInfo = MutableStateFlow<PeerSignalInfo?>(null)
@@ -175,11 +183,43 @@ class LocalP2PEngine(private val context: Context) {
             nsdEngine.discoveredMdnsPeers.collect { mdnsPeers ->
                 for (peer in mdnsPeers) {
                     if (peer.id != _userProfile.value.id) {
-                        peersMap[peer.id] = peer
+                        val existing = peersMap[peer.id]
+                        if (existing == null || existing.ip != peer.ip) {
+                            peersMap[peer.id] = peer
+                            sendHandshakeProbe(peer.ip)
+                        }
                     }
                 }
                 _discoveredPeers.value = peersMap.values.toList()
                 updateRoomAudioTargets(_currentRoom.value)
+            }
+        }
+    }
+
+    /**
+     * Sends an immediate handshake probe to a newly discovered peer IP to establish instant bi-directional P2P connection.
+     */
+    fun sendHandshakeProbe(ip: String) {
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "HANDSHAKE_PROBE")
+                    put("id", _userProfile.value.id)
+                    put("name", _userProfile.value.username)
+                    put("color", _userProfile.value.avatarColor)
+                    put("avatarUri", _userProfile.value.avatarUri ?: "")
+                    put("userStatus", _userProfile.value.userStatus.name)
+                    put("statusMessage", _userProfile.value.statusMessage)
+                    put("room", _currentRoom.value)
+                    put("isSpeaking", audioEngine.micLevel.value > 0.08f)
+                    put("isVideoActive", videoEngine.isVideoStreaming.value)
+                    put("isMuted", audioEngine.isMuted.value)
+                    put("device", "${Build.MANUFACTURER} ${Build.MODEL}")
+                    put("timestamp", System.currentTimeMillis())
+                }
+                sendJsonToIp(json, ip)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send handshake probe to $ip", e)
             }
         }
     }
@@ -505,6 +545,8 @@ class LocalP2PEngine(private val context: Context) {
                     put("id", _userProfile.value.id)
                     put("name", _userProfile.value.username)
                     put("color", _userProfile.value.avatarColor)
+                    put("avatarUri", _userProfile.value.avatarUri ?: "")
+                    put("avatarBase64", _userProfile.value.avatarBase64 ?: "")
                     put("userStatus", _userProfile.value.userStatus.name)
                     put("statusMessage", _userProfile.value.statusMessage)
                     put("room", _currentRoom.value)
@@ -590,7 +632,11 @@ class LocalP2PEngine(private val context: Context) {
             callId = callId,
             peer = peer,
             isVideo = isVideo,
-            state = CallState.OUTGOING_RINGING
+            state = CallState.OUTGOING_RINGING,
+            isSpeakerOn = audioEngine.isSpeakerOn.value,
+            isMicMuted = audioEngine.isMuted.value,
+            isCameraOff = videoEngine.isCameraOff.value,
+            isFrontCamera = videoEngine.isFrontCamera.value
         )
 
         // Set audio/video targets
@@ -610,6 +656,8 @@ class LocalP2PEngine(private val context: Context) {
                 put("callerId", _userProfile.value.id)
                 put("callerName", _userProfile.value.username)
                 put("callerColor", _userProfile.value.avatarColor)
+                put("callerAvatarUri", _userProfile.value.avatarUri ?: "")
+                put("callerAvatarBase64", _userProfile.value.avatarBase64 ?: "")
                 put("callerIp", _localIp.value)
             }
             sendJsonToIp(json, peer.ip)
@@ -623,7 +671,11 @@ class LocalP2PEngine(private val context: Context) {
         val currentCall = _activeCall.value ?: return
         val updatedCall = currentCall.copy(
             state = CallState.CONNECTED,
-            startTime = System.currentTimeMillis()
+            startTime = System.currentTimeMillis(),
+            isSpeakerOn = audioEngine.isSpeakerOn.value,
+            isMicMuted = audioEngine.isMuted.value,
+            isCameraOff = videoEngine.isCameraOff.value,
+            isFrontCamera = videoEngine.isFrontCamera.value
         )
         _activeCall.value = updatedCall
 
@@ -648,8 +700,80 @@ class LocalP2PEngine(private val context: Context) {
                 put("type", "CALL_ACCEPT")
                 put("callId", currentCall.callId)
                 put("peerId", _userProfile.value.id)
+                put("acceptorAvatarBase64", _userProfile.value.avatarBase64 ?: "")
             }
             sendJsonToIp(json, currentCall.peer.ip)
+        }
+    }
+
+    fun toggleCallMic() {
+        audioEngine.toggleMute()
+        val isMuted = audioEngine.isMuted.value
+        _activeCall.value = _activeCall.value?.copy(isMicMuted = isMuted)
+        sendCallControl(isMuted = isMuted)
+    }
+
+    fun toggleCallCamera() {
+        videoEngine.toggleCameraVideo()
+        val isCameraOff = videoEngine.isCameraOff.value
+        _activeCall.value = _activeCall.value?.copy(isCameraOff = isCameraOff)
+        sendCallControl(isCameraOff = isCameraOff)
+    }
+
+    fun switchCallCamera() {
+        videoEngine.switchCamera()
+        _activeCall.value = _activeCall.value?.copy(isFrontCamera = videoEngine.isFrontCamera.value)
+    }
+
+    fun toggleCallSpeaker() {
+        audioEngine.toggleSpeaker()
+        _activeCall.value = _activeCall.value?.copy(isSpeakerOn = audioEngine.isSpeakerOn.value)
+    }
+
+    fun startCallScreenShare(appName: String, frameProvider: () -> android.graphics.Bitmap?) {
+        videoEngine.startScreenShare(appName, frameProvider)
+        _activeCall.value = _activeCall.value?.copy(
+            isScreenSharing = true,
+            screenSharedAppName = appName
+        )
+        sendCallControl(isScreenSharing = true, screenSharedAppName = appName)
+    }
+
+    fun sendCallScreenShareFrame(bitmap: android.graphics.Bitmap, appName: String) {
+        videoEngine.sendDirectScreenShareBitmap(bitmap, appName)
+    }
+
+    fun stopCallScreenShare() {
+        videoEngine.stopScreenShare()
+        _activeCall.value = _activeCall.value?.copy(
+            isScreenSharing = false,
+            screenSharedAppName = null
+        )
+        sendCallControl(isScreenSharing = false, screenSharedAppName = "")
+    }
+
+    private fun sendCallControl(
+        isMuted: Boolean? = null,
+        isCameraOff: Boolean? = null,
+        isScreenSharing: Boolean? = null,
+        screenSharedAppName: String? = null
+    ) {
+        val currentCall = _activeCall.value ?: return
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "CALL_CONTROL")
+                    put("callId", currentCall.callId)
+                    put("senderId", _userProfile.value.id)
+                    if (isMuted != null) put("isMuted", isMuted)
+                    if (isCameraOff != null) put("isCameraOff", isCameraOff)
+                    if (isScreenSharing != null) put("isScreenSharing", isScreenSharing)
+                    if (screenSharedAppName != null) put("screenSharedAppName", screenSharedAppName)
+                }
+                sendJsonToIp(json, currentCall.peer.ip)
+            } catch (e: Exception) {
+                // Ignore
+            }
         }
     }
 
@@ -790,6 +914,205 @@ class LocalP2PEngine(private val context: Context) {
     }
 
     /**
+     * Starts a room-wide Group Video & Audio Call.
+     */
+    fun startGroupVideoCall(roomId: String, roomName: String) {
+        val callId = UUID.randomUUID().toString()
+        val roomPeers = peersMap.values.filter { it.currentRoom == roomId && it.id != _userProfile.value.id }
+
+        _activeGroupCall.value = ActiveGroupCall(
+            callId = callId,
+            roomId = roomId,
+            roomName = roomName,
+            initiatorId = _userProfile.value.id,
+            initiatorName = _userProfile.value.displayName.ifBlank { _userProfile.value.username },
+            participants = roomPeers,
+            isCameraOff = videoEngine.isCameraOff.value,
+            isFrontCamera = videoEngine.isFrontCamera.value,
+            isMicMuted = audioEngine.isMuted.value,
+            isSpeakerOn = audioEngine.isSpeakerOn.value,
+            startTime = System.currentTimeMillis()
+        )
+
+        updateRoomAudioTargets(roomId)
+
+        audioEngine.startAudioPlayback()
+        audioEngine.startAudioRecording(_userProfile.value.id, "group_$callId")
+        videoEngine.startVideoReceiver()
+
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "GROUP_CALL_START")
+                    put("callId", callId)
+                    put("roomId", roomId)
+                    put("roomName", roomName)
+                    put("initiatorId", _userProfile.value.id)
+                    put("initiatorName", _userProfile.value.displayName.ifBlank { _userProfile.value.username })
+                    put("initiatorColor", _userProfile.value.avatarColor)
+                    put("initiatorAvatarBase64", _userProfile.value.avatarBase64 ?: "")
+                    put("initiatorIp", _localIp.value)
+                    put("timestamp", System.currentTimeMillis())
+                }
+                sendJsonPacket(json)
+                for (peer in roomPeers) {
+                    sendJsonToIp(json, peer.ip)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting group video call", e)
+            }
+        }
+    }
+
+    /**
+     * Joins an ongoing Group Video & Audio Call.
+     */
+    fun joinGroupVideoCall(invitation: GroupCallInvitation) {
+        setRoom(invitation.roomId)
+        val roomPeers = peersMap.values.filter { it.currentRoom == invitation.roomId && it.id != _userProfile.value.id }
+
+        _activeGroupCall.value = ActiveGroupCall(
+            callId = invitation.callId,
+            roomId = invitation.roomId,
+            roomName = invitation.roomName,
+            initiatorId = invitation.initiatorId,
+            initiatorName = invitation.initiatorName,
+            participants = roomPeers,
+            isCameraOff = videoEngine.isCameraOff.value,
+            isFrontCamera = videoEngine.isFrontCamera.value,
+            isMicMuted = audioEngine.isMuted.value,
+            isSpeakerOn = audioEngine.isSpeakerOn.value,
+            startTime = System.currentTimeMillis()
+        )
+
+        updateRoomAudioTargets(invitation.roomId)
+
+        audioEngine.startAudioPlayback()
+        audioEngine.startAudioRecording(_userProfile.value.id, "group_${invitation.callId}")
+        videoEngine.startVideoReceiver()
+
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "GROUP_CALL_JOIN")
+                    put("callId", invitation.callId)
+                    put("roomId", invitation.roomId)
+                    put("peerId", _userProfile.value.id)
+                    put("peerName", _userProfile.value.displayName.ifBlank { _userProfile.value.username })
+                    put("peerColor", _userProfile.value.avatarColor)
+                    put("avatarBase64", _userProfile.value.avatarBase64 ?: "")
+                    put("peerIp", _localIp.value)
+                }
+                sendJsonPacket(json)
+                for (peer in roomPeers) {
+                    sendJsonToIp(json, peer.ip)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error joining group call", e)
+            }
+        }
+    }
+
+    /**
+     * Leaves the currently active Group Video Call.
+     */
+    fun leaveGroupVideoCall() {
+        val currentGroupCall = _activeGroupCall.value ?: return
+        _activeGroupCall.value = null
+
+        audioEngine.stopAudioRecording()
+        videoEngine.stopCameraStream()
+
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "GROUP_CALL_LEAVE")
+                    put("callId", currentGroupCall.callId)
+                    put("roomId", currentGroupCall.roomId)
+                    put("peerId", _userProfile.value.id)
+                }
+                sendJsonPacket(json)
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+
+        updateRoomAudioTargets(_currentRoom.value)
+    }
+
+    fun toggleGroupCallMic() {
+        audioEngine.toggleMute()
+        val isMuted = audioEngine.isMuted.value
+        _activeGroupCall.value = _activeGroupCall.value?.copy(isMicMuted = isMuted)
+        sendGroupCallControl(isMuted = isMuted)
+    }
+
+    fun toggleGroupCallCamera() {
+        videoEngine.toggleCameraVideo()
+        val isCameraOff = videoEngine.isCameraOff.value
+        _activeGroupCall.value = _activeGroupCall.value?.copy(isCameraOff = isCameraOff)
+        sendGroupCallControl(isCameraOff = isCameraOff)
+    }
+
+    fun switchGroupCallCamera() {
+        videoEngine.switchCamera()
+        _activeGroupCall.value = _activeGroupCall.value?.copy(isFrontCamera = videoEngine.isFrontCamera.value)
+    }
+
+    fun toggleGroupCallSpeaker() {
+        audioEngine.toggleSpeaker()
+        _activeGroupCall.value = _activeGroupCall.value?.copy(isSpeakerOn = audioEngine.isSpeakerOn.value)
+    }
+
+    fun startGroupCallScreenShare(appName: String, frameProvider: () -> android.graphics.Bitmap?) {
+        videoEngine.startScreenShare(appName, frameProvider)
+        _activeGroupCall.value = _activeGroupCall.value?.copy(
+            isScreenSharing = true,
+            screenSharedAppName = appName
+        )
+        sendGroupCallControl(isScreenSharing = true, screenSharedAppName = appName)
+    }
+
+    fun sendGroupCallScreenShareFrame(bitmap: android.graphics.Bitmap, appName: String) {
+        videoEngine.sendDirectScreenShareBitmap(bitmap, appName)
+    }
+
+    fun stopGroupCallScreenShare() {
+        videoEngine.stopScreenShare()
+        _activeGroupCall.value = _activeGroupCall.value?.copy(
+            isScreenSharing = false,
+            screenSharedAppName = null
+        )
+        sendGroupCallControl(isScreenSharing = false, screenSharedAppName = "")
+    }
+
+    private fun sendGroupCallControl(
+        isMuted: Boolean? = null,
+        isCameraOff: Boolean? = null,
+        isScreenSharing: Boolean? = null,
+        screenSharedAppName: String? = null
+    ) {
+        val currentGroupCall = _activeGroupCall.value ?: return
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "GROUP_CALL_CONTROL")
+                    put("callId", currentGroupCall.callId)
+                    put("roomId", currentGroupCall.roomId)
+                    put("senderId", _userProfile.value.id)
+                    if (isMuted != null) put("isMuted", isMuted)
+                    if (isCameraOff != null) put("isCameraOff", isCameraOff)
+                    if (isScreenSharing != null) put("isScreenSharing", isScreenSharing)
+                    if (screenSharedAppName != null) put("screenSharedAppName", screenSharedAppName)
+                }
+                sendJsonPacket(json)
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
+
+    /**
      * Connects manually to an IP (e.g. 192.168.1.15).
      */
     fun manualConnectToIp(ip: String) {
@@ -800,6 +1123,7 @@ class LocalP2PEngine(private val context: Context) {
                     put("id", _userProfile.value.id)
                     put("name", _userProfile.value.username)
                     put("color", _userProfile.value.avatarColor)
+                    put("avatarUri", _userProfile.value.avatarUri ?: "")
                     put("userStatus", _userProfile.value.userStatus.name)
                     put("statusMessage", _userProfile.value.statusMessage)
                     put("room", _currentRoom.value)
@@ -822,40 +1146,7 @@ class LocalP2PEngine(private val context: Context) {
 
             when (type) {
                 "PING" -> {
-                    val id = json.optString("id")
-                    if (id == _userProfile.value.id || id.isEmpty()) return
-
-                    val name = json.optString("name", "مستخدم")
-                    val color = json.optLong("color", 0xFF0EA5E9)
-                    val userStatusStr = json.optString("userStatus", UserPresenceStatus.ONLINE.name)
-                    val userStatus = try {
-                        UserPresenceStatus.valueOf(userStatusStr)
-                    } catch (e: Exception) {
-                        UserPresenceStatus.ONLINE
-                    }
-                    val statusMessage = json.optString("statusMessage", "")
-                    val room = json.optString("room", "general")
-                    val isSpeaking = json.optBoolean("isSpeaking", false)
-                    val isVideoActive = json.optBoolean("isVideoActive", false)
-                    val isMuted = json.optBoolean("isMuted", false)
-                    val device = json.optString("device", "")
-
-                    val peer = Peer(
-                        id = id,
-                        name = name,
-                        ip = senderIp,
-                        avatarColor = color,
-                        userStatus = userStatus,
-                        statusMessage = statusMessage,
-                        currentRoom = room,
-                        isSpeaking = isSpeaking,
-                        isVideoActive = isVideoActive,
-                        isMuted = isMuted,
-                        lastSeen = System.currentTimeMillis(),
-                        deviceModel = device
-                    )
-                    peersMap[id] = peer
-                    _discoveredPeers.value = peersMap.values.toList()
+                    parseAndStorePeer(json, senderIp)
 
                     // If sender probed during subnet sweep, immediately reply so scanner discovers this device
                     if (json.optBoolean("isScanProbe", false)) {
@@ -866,6 +1157,7 @@ class LocalP2PEngine(private val context: Context) {
                                     put("id", _userProfile.value.id)
                                     put("name", _userProfile.value.username)
                                     put("color", _userProfile.value.avatarColor)
+                                    put("avatarUri", _userProfile.value.avatarUri ?: "")
                                     put("userStatus", _userProfile.value.userStatus.name)
                                     put("statusMessage", _userProfile.value.statusMessage)
                                     put("room", _currentRoom.value)
@@ -880,17 +1172,41 @@ class LocalP2PEngine(private val context: Context) {
                             }
                         }
                     }
+                }
 
-                    // If peer is in our room, update target
-                    if (room == _currentRoom.value) {
+                "HANDSHAKE_PROBE" -> {
+                    val id = json.optString("id")
+                    if (id == _userProfile.value.id || id.isEmpty()) return
+                    parseAndStorePeer(json, senderIp)
+
+                    scope.launch {
                         try {
-                            val addr = InetAddress.getByName(senderIp)
-                            audioEngine.updateTarget(id, addr, NetworkUtils.AUDIO_PORT)
-                            videoEngine.updateTarget(id, addr, NetworkUtils.VIDEO_PORT)
+                            val ackJson = JSONObject().apply {
+                                put("type", "HANDSHAKE_ACK")
+                                put("id", _userProfile.value.id)
+                                put("name", _userProfile.value.username)
+                                put("color", _userProfile.value.avatarColor)
+                                put("avatarUri", _userProfile.value.avatarUri ?: "")
+                                put("userStatus", _userProfile.value.userStatus.name)
+                                put("statusMessage", _userProfile.value.statusMessage)
+                                put("room", _currentRoom.value)
+                                put("isSpeaking", audioEngine.micLevel.value > 0.08f)
+                                put("isVideoActive", videoEngine.isVideoStreaming.value)
+                                put("isMuted", audioEngine.isMuted.value)
+                                put("device", "${Build.MANUFACTURER} ${Build.MODEL}")
+                                put("timestamp", System.currentTimeMillis())
+                            }
+                            sendJsonToIp(ackJson, senderIp)
                         } catch (e: Exception) {
                             // Ignore
                         }
                     }
+                }
+
+                "HANDSHAKE_ACK" -> {
+                    val id = json.optString("id")
+                    if (id == _userProfile.value.id || id.isEmpty()) return
+                    parseAndStorePeer(json, senderIp)
                 }
 
                 "CHAT_MSG" -> {
@@ -984,12 +1300,16 @@ class LocalP2PEngine(private val context: Context) {
                     val isVideo = json.optBoolean("isVideo", false)
                     val callerName = json.optString("callerName", "مستخدم")
                     val callerColor = json.optLong("callerColor", 0xFF0EA5E9)
+                    val callerAvatarUri = json.optString("callerAvatarUri").takeIf { it.isNotBlank() }
+                    val callerAvatarBase64 = json.optString("callerAvatarBase64").takeIf { it.isNotBlank() }
 
                     val peer = Peer(
                         id = callerId,
                         name = callerName,
                         ip = senderIp,
-                        avatarColor = callerColor
+                        avatarColor = callerColor,
+                        avatarUri = callerAvatarUri,
+                        avatarBase64 = callerAvatarBase64
                     )
                     peersMap[callerId] = peer
 
@@ -997,15 +1317,25 @@ class LocalP2PEngine(private val context: Context) {
                         callId = callId,
                         peer = peer,
                         isVideo = isVideo,
-                        state = CallState.INCOMING_RINGING
+                        state = CallState.INCOMING_RINGING,
+                        isSpeakerOn = audioEngine.isSpeakerOn.value,
+                        isMicMuted = audioEngine.isMuted.value,
+                        isCameraOff = videoEngine.isCameraOff.value,
+                        isFrontCamera = videoEngine.isFrontCamera.value
                     )
                 }
 
                 "CALL_ACCEPT" -> {
                     val callId = json.optString("callId")
+                    val acceptorAvatarBase64 = json.optString("acceptorAvatarBase64").takeIf { it.isNotBlank() }
                     val currentCall = _activeCall.value
                     if (currentCall != null && currentCall.callId == callId) {
+                        val updatedPeer = if (acceptorAvatarBase64 != null) {
+                            currentCall.peer.copy(avatarBase64 = acceptorAvatarBase64)
+                        } else currentCall.peer
+
                         val updatedCall = currentCall.copy(
+                            peer = updatedPeer,
                             state = CallState.CONNECTED,
                             startTime = System.currentTimeMillis()
                         )
@@ -1016,6 +1346,29 @@ class LocalP2PEngine(private val context: Context) {
                             videoEngine.startVideoReceiver()
                         }
                         startCallQualityMonitor(callId, currentCall.peer.ip, currentCall.isVideo)
+                    }
+                }
+
+                "CALL_CONTROL" -> {
+                    val callId = json.optString("callId")
+                    val currentCall = _activeCall.value
+                    if (currentCall != null && currentCall.callId == callId) {
+                        var updatedCall = currentCall
+                        if (json.has("isMuted")) {
+                            updatedCall = updatedCall.copy(isRemoteMuted = json.optBoolean("isMuted"))
+                        }
+                        if (json.has("isCameraOff")) {
+                            updatedCall = updatedCall.copy(isRemoteCameraOff = json.optBoolean("isCameraOff"))
+                        }
+                        if (json.has("isScreenSharing")) {
+                            val isScreen = json.optBoolean("isScreenSharing")
+                            val appName = json.optString("screenSharedAppName").takeIf { it.isNotBlank() }
+                            updatedCall = updatedCall.copy(
+                                isScreenSharing = isScreen,
+                                screenSharedAppName = appName
+                            )
+                        }
+                        _activeCall.value = updatedCall
                     }
                 }
 
@@ -1087,6 +1440,75 @@ class LocalP2PEngine(private val context: Context) {
 
                     _incomingRoomInvites.tryEmit(invitation)
                 }
+
+                "GROUP_CALL_START" -> {
+                    val initiatorId = json.optString("initiatorId")
+                    if (initiatorId == _userProfile.value.id) return
+
+                    val callId = json.optString("callId")
+                    val roomId = json.optString("roomId")
+                    val roomName = json.optString("roomName", "غرفة")
+                    val initiatorName = json.optString("initiatorName", "مستخدم")
+                    val initiatorColor = json.optLong("initiatorColor", 0xFF6750A4)
+                    val initiatorAvatarBase64 = json.optString("initiatorAvatarBase64").takeIf { it.isNotBlank() }
+                    val timestamp = json.optLong("timestamp", System.currentTimeMillis())
+
+                    val invite = GroupCallInvitation(
+                        callId = callId,
+                        roomId = roomId,
+                        roomName = roomName,
+                        initiatorId = initiatorId,
+                        initiatorName = initiatorName,
+                        initiatorColor = initiatorColor,
+                        initiatorAvatarBase64 = initiatorAvatarBase64,
+                        timestamp = timestamp
+                    )
+
+                    _incomingGroupCallInvite.tryEmit(invite)
+                }
+
+                "GROUP_CALL_JOIN" -> {
+                    val peerId = json.optString("peerId")
+                    if (peerId == _userProfile.value.id) return
+                    val callId = json.optString("callId")
+                    val roomId = json.optString("roomId")
+                    val peerName = json.optString("peerName", "مستخدم")
+                    val peerColor = json.optLong("peerColor", 0xFF0EA5E9)
+                    val avatarBase64 = json.optString("avatarBase64").takeIf { it.isNotBlank() }
+                    val peerIp = json.optString("peerIp", senderIp)
+
+                    val joiningPeer = Peer(
+                        id = peerId,
+                        name = peerName,
+                        ip = peerIp,
+                        avatarColor = peerColor,
+                        avatarBase64 = avatarBase64,
+                        currentRoom = roomId
+                    )
+                    peersMap[peerId] = joiningPeer
+
+                    val cur = _activeGroupCall.value
+                    if (cur != null && cur.callId == callId) {
+                        val currentList = cur.participants.filter { it.id != peerId }.toMutableList()
+                        currentList.add(joiningPeer)
+                        _activeGroupCall.value = cur.copy(participants = currentList)
+                        updateRoomAudioTargets(roomId)
+                    }
+                }
+
+                "GROUP_CALL_LEAVE" -> {
+                    val peerId = json.optString("peerId")
+                    if (peerId == _userProfile.value.id) return
+                    val cur = _activeGroupCall.value
+                    if (cur != null) {
+                        val updatedList = cur.participants.filter { it.id != peerId }
+                        _activeGroupCall.value = cur.copy(participants = updatedList)
+                    }
+                }
+
+                "GROUP_CALL_CONTROL" -> {
+                    // Update peer states in active group call
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling incoming packet", e)
@@ -1129,6 +1551,58 @@ class LocalP2PEngine(private val context: Context) {
             broadcastSocket?.send(packet)
         } catch (e: Exception) {
             Log.e(TAG, "Failed sending to IP: $ip", e)
+        }
+    }
+
+    private fun parseAndStorePeer(json: JSONObject, senderIp: String) {
+        val id = json.optString("id")
+        if (id == _userProfile.value.id || id.isEmpty()) return
+
+        val name = json.optString("name", "مستخدم")
+        val color = json.optLong("color", 0xFF0EA5E9)
+        val avatarUri = json.optString("avatarUri").takeIf { it.isNotBlank() }
+        val avatarBase64 = json.optString("avatarBase64").takeIf { it.isNotBlank() }
+        val userStatusStr = json.optString("userStatus", UserPresenceStatus.ONLINE.name)
+        val userStatus = try {
+            UserPresenceStatus.valueOf(userStatusStr)
+        } catch (e: Exception) {
+            UserPresenceStatus.ONLINE
+        }
+        val statusMessage = json.optString("statusMessage", "")
+        val room = json.optString("room", "general")
+        val isSpeaking = json.optBoolean("isSpeaking", false)
+        val isVideoActive = json.optBoolean("isVideoActive", false)
+        val isMuted = json.optBoolean("isMuted", false)
+        val device = json.optString("device", "")
+
+        val peer = Peer(
+            id = id,
+            name = name,
+            ip = senderIp,
+            avatarColor = color,
+            avatarUri = avatarUri,
+            avatarBase64 = avatarBase64,
+            userStatus = userStatus,
+            statusMessage = statusMessage,
+            currentRoom = room,
+            isSpeaking = isSpeaking,
+            isVideoActive = isVideoActive,
+            isMuted = isMuted,
+            lastSeen = System.currentTimeMillis(),
+            deviceModel = device
+        )
+        peersMap[id] = peer
+        _discoveredPeers.value = peersMap.values.toList()
+
+        // If peer is in our room, update audio/video target
+        if (room == _currentRoom.value) {
+            try {
+                val addr = InetAddress.getByName(senderIp)
+                audioEngine.updateTarget(id, addr, NetworkUtils.AUDIO_PORT)
+                videoEngine.updateTarget(id, addr, NetworkUtils.VIDEO_PORT)
+            } catch (e: Exception) {
+                // Ignore
+            }
         }
     }
 

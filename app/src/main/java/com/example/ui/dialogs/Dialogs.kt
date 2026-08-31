@@ -1,5 +1,7 @@
 package com.example.ui.dialogs
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -8,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -77,6 +80,12 @@ import com.example.ui.theme.AccentRose
 import com.example.ui.theme.PeerColors
 import com.example.ui.theme.PrimaryPurple
 import com.example.ui.theme.PrimaryPurpleLight
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.foundation.layout.fillMaxSize
 import com.example.ui.theme.StatusGreen
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -87,7 +96,7 @@ fun UserProfileDialog(
     currentThemeMode: ThemeMode = ThemeMode.SYSTEM,
     onThemeModeChange: (ThemeMode) -> Unit = {},
     onDismiss: () -> Unit,
-    onSaveProfile: (displayName: String, color: Long, statusMessage: String, bio: String, userStatus: UserPresenceStatus) -> Unit,
+    onSaveProfile: (displayName: String, color: Long, statusMessage: String, bio: String, userStatus: UserPresenceStatus, avatarUri: String?) -> Unit,
     onLogout: () -> Unit
 ) {
     var displayName by remember { mutableStateOf(userProfile.displayName.ifBlank { userProfile.username }) }
@@ -95,6 +104,13 @@ fun UserProfileDialog(
     var bio by remember { mutableStateOf(userProfile.bio) }
     var selectedColor by remember { mutableLongStateOf(userProfile.avatarColor) }
     var selectedStatus by remember { mutableStateOf(userProfile.userStatus) }
+    var selectedAvatarUri by remember { mutableStateOf(userProfile.avatarUri) }
+
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            selectedAvatarUri = uri.toString()
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -113,7 +129,9 @@ fun UserProfileDialog(
         },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 // User ID and Username badge
@@ -128,16 +146,21 @@ fun UserProfileDialog(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Box(
-                            modifier = Modifier.size(48.dp),
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(Color(selectedColor))
+                                .clickable { galleryLauncher.launch("image/*") },
                             contentAlignment = Alignment.Center
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(selectedColor)),
-                                contentAlignment = Alignment.Center
-                            ) {
+                            if (selectedAvatarUri != null) {
+                                AsyncImage(
+                                    model = selectedAvatarUri,
+                                    contentDescription = "Profile Photo",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
                                 Text(
                                     text = userProfile.username.take(2).uppercase(),
                                     color = Color.White,
@@ -145,10 +168,27 @@ fun UserProfileDialog(
                                     style = MaterialTheme.typography.titleMedium
                                 )
                             }
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .size(18.dp)
+                                    .clip(CircleShape)
+                                    .background(PrimaryPurple),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CameraAlt,
+                                    contentDescription = "Change photo",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(10.dp)
+                                )
+                            }
                             UserStatusDot(
                                 status = selectedStatus,
-                                size = 14.dp,
-                                modifier = Modifier.align(Alignment.BottomEnd)
+                                size = 12.dp,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(2.dp)
                             )
                         }
                         Column(modifier = Modifier.weight(1f)) {
@@ -168,6 +208,15 @@ fun UserProfileDialog(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            if (selectedAvatarUri != null) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                TextButton(
+                                    onClick = { selectedAvatarUri = null },
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text("حذف الصورة الشخصية", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
                         }
                     }
                 }
@@ -278,7 +327,7 @@ fun UserProfileDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    onSaveProfile(displayName.trim(), selectedColor, statusMessage.trim(), bio.trim(), selectedStatus)
+                    onSaveProfile(displayName.trim(), selectedColor, statusMessage.trim(), bio.trim(), selectedStatus, selectedAvatarUri)
                     onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),

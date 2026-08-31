@@ -36,6 +36,16 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Forward
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import android.widget.Toast
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
@@ -87,11 +97,18 @@ fun ChatMessageBubble(
     voiceNoteProgress: Float = 0f,
     voiceNoteCurrentMs: Int = 0,
     onTogglePlayVoiceNote: (ChatMessage) -> Unit = {},
-    onSeekVoiceNote: (Float) -> Unit = {}
+    onSeekVoiceNote: (Float) -> Unit = {},
+    onEditClick: ((ChatMessage) -> Unit)? = null,
+    onDeleteClick: ((ChatMessage) -> Unit)? = null,
+    onForwardClick: ((ChatMessage) -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val isMine = message.isMine
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
     val timeString = timeFormat.format(Date(message.timestamp))
+
+    var showMenu by remember { mutableStateOf(false) }
 
     var decodedBitmap by remember(message.imageBase64, message.localFilePath) {
         mutableStateOf<Bitmap?>(null)
@@ -143,17 +160,29 @@ fun ChatMessageBubble(
             Spacer(modifier = Modifier.width(8.dp))
         }
 
-        // Bubble Container
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (isMine) 16.dp else 4.dp,
-                bottomEnd = if (isMine) 4.dp else 16.dp
-            ),
-            color = if (isMine) PrimaryPurple else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.widthIn(max = 320.dp)
-        ) {
+        // Bubble Container with Context Menu Box
+        Box {
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = 16.dp,
+                    topEnd = 16.dp,
+                    bottomStart = if (isMine) 16.dp else 4.dp,
+                    bottomEnd = if (isMine) 4.dp else 16.dp
+                ),
+                color = if (isMine) PrimaryPurple else MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .widthIn(max = 320.dp)
+                    .pointerInput(message.id) {
+                        detectTapGestures(
+                            onTap = {
+                                showMenu = true
+                            },
+                            onLongPress = {
+                                showMenu = true
+                            }
+                        )
+                    }
+            ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 if (!isMine) {
                     Text(
@@ -229,8 +258,17 @@ fun ChatMessageBubble(
 
                 Row(
                     modifier = Modifier.align(Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    if (message.isEdited) {
+                        Text(
+                            text = "(معَدلة)",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 10.sp,
+                            color = if (isMine) Color.White.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
                     Text(
                         text = timeString,
                         style = MaterialTheme.typography.labelSmall,
@@ -239,15 +277,81 @@ fun ChatMessageBubble(
                     if (isMine) {
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "✓",
+                            text = if (message.isRead) "✓✓" else "✓",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.8f)
+                            fontWeight = FontWeight.Bold,
+                            color = if (message.isRead) Color(0xFF4ADE80) else Color.White.copy(alpha = 0.8f)
                         )
                     }
                 }
             }
         }
+
+        // Context Menu Dropdown
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false }
+        ) {
+            // 1. Copy
+            if (message.content.isNotBlank() && message.messageType == MessageType.TEXT) {
+                DropdownMenuItem(
+                    text = { Text("نسخ النص") },
+                    leadingIcon = {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, tint = PrimaryPurple)
+                    },
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(message.content))
+                        showMenu = false
+                        Toast.makeText(context, "تم نسخ النص", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+
+            // 2. Forward
+            if (onForwardClick != null) {
+                DropdownMenuItem(
+                    text = { Text("تحويل الرسالة") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Forward, contentDescription = null, tint = PrimaryPurple)
+                    },
+                    onClick = {
+                        showMenu = false
+                        onForwardClick(message)
+                    }
+                )
+            }
+
+            // 3. Edit (if own text message)
+            if (isMine && message.messageType == MessageType.TEXT && onEditClick != null) {
+                DropdownMenuItem(
+                    text = { Text("تعديل الرسالة") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Edit, contentDescription = null, tint = PrimaryPurple)
+                    },
+                    onClick = {
+                        showMenu = false
+                        onEditClick(message)
+                    }
+                )
+            }
+
+            // 4. Delete
+            if (onDeleteClick != null) {
+                DropdownMenuItem(
+                    text = { Text("حذف الرسالة", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = {
+                        Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    },
+                    onClick = {
+                        showMenu = false
+                        onDeleteClick(message)
+                        Toast.makeText(context, "تم حذف الرسالة", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+        }
     }
+}
 }
 
 @Composable

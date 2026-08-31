@@ -20,6 +20,8 @@ data class Peer(
     val ip: String,
     val port: Int = 8888,
     val avatarColor: Long = 0xFF0EA5E9,
+    val avatarUri: String? = null,
+    val avatarBase64: String? = null,
     val userStatus: UserPresenceStatus = UserPresenceStatus.ONLINE,
     val statusMessage: String = "",
     val currentRoom: String = "general",
@@ -108,7 +110,9 @@ data class ChatMessage(
     val senderIp: String? = null,
     val localFilePath: String? = null,
     val downloadProgress: Float = 0f,
-    val isDownloaded: Boolean = false
+    val isDownloaded: Boolean = false,
+    val isRead: Boolean = true,
+    val isEdited: Boolean = false
 )
 
 /**
@@ -158,7 +162,44 @@ data class ActiveCall(
     val isSpeakerOn: Boolean = true,
     val isCameraOff: Boolean = false,
     val isFrontCamera: Boolean = true,
+    val isRemoteCameraOff: Boolean = false,
+    val isRemoteMuted: Boolean = false,
+    val isScreenSharing: Boolean = false,
+    val screenSharedAppName: String? = null,
     val signalInfo: PeerSignalInfo? = null
+)
+
+/**
+ * Group Video & Audio Call across all room participants.
+ */
+data class ActiveGroupCall(
+    val callId: String,
+    val roomId: String,
+    val roomName: String,
+    val initiatorId: String,
+    val initiatorName: String,
+    val participants: List<Peer> = emptyList(),
+    val isCameraOff: Boolean = false,
+    val isFrontCamera: Boolean = true,
+    val isMicMuted: Boolean = false,
+    val isSpeakerOn: Boolean = true,
+    val isScreenSharing: Boolean = false,
+    val screenSharedAppName: String? = null,
+    val startTime: Long = System.currentTimeMillis()
+)
+
+/**
+ * Incoming Group Video Call invitation for room members.
+ */
+data class GroupCallInvitation(
+    val callId: String,
+    val roomId: String,
+    val roomName: String,
+    val initiatorId: String,
+    val initiatorName: String,
+    val initiatorColor: Long = 0xFF6750A4,
+    val initiatorAvatarBase64: String? = null,
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 /**
@@ -172,6 +213,8 @@ data class UserProfile(
     val userStatus: UserPresenceStatus = UserPresenceStatus.ONLINE,
     val statusMessage: String = "متصل محلياً ومستعد للحديث",
     val bio: String = "",
+    val avatarUri: String? = null,
+    val avatarBase64: String? = null,
     val isLoggedIn: Boolean = true,
     val createdAt: Long = System.currentTimeMillis()
 )
@@ -183,5 +226,8 @@ data class PeerVideoFrame(
     val peerId: String,
     val peerName: String,
     val bitmap: android.graphics.Bitmap?,
-    val timestamp: Long
+    val timestamp: Long,
+    val isCameraOff: Boolean = false,
+    val isScreenShare: Boolean = false,
+    val appTitle: String? = null
 )

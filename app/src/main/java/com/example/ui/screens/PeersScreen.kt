@@ -67,7 +67,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import android.util.Base64
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -76,6 +80,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.model.Peer
 import com.example.model.UserPresenceStatus
 import com.example.ui.components.UserStatusBadge
@@ -692,6 +697,17 @@ private fun PeerDetailCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Avatar with presence status dot
+                val avatarBmp = androidx.compose.runtime.remember(peer.avatarBase64) {
+                    if (!peer.avatarBase64.isNullOrBlank()) {
+                        try {
+                            val bytes = Base64.decode(peer.avatarBase64, Base64.DEFAULT)
+                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    } else null
+                }
+
                 Box(
                     modifier = Modifier.size(52.dp),
                     contentAlignment = Alignment.Center
@@ -703,12 +719,32 @@ private fun PeerDetailCard(
                             .background(Color(peer.avatarColor)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = peer.name.take(2).uppercase(),
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                        if (avatarBmp != null) {
+                            Image(
+                                bitmap = avatarBmp.asImageBitmap(),
+                                contentDescription = peer.name,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else if (!peer.avatarUri.isNullOrBlank()) {
+                            AsyncImage(
+                                model = peer.avatarUri,
+                                contentDescription = peer.name,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Text(
+                                text = peer.name.take(2).uppercase(),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
                     }
                     UserStatusDot(
                         status = peer.userStatus,
