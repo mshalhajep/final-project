@@ -901,7 +901,7 @@ private fun NetworkConnectionTipsCard(localIp: String) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "• إذا كنت بدون راوتر Wi-Fi، شغّل نقطة اتصال (Hotspot) على أحد الهواتف واجعل بقية الأجهزة تتصل بها.\n• لا يلزم وجود اتصال بالإنترنت أو شريحة SIM.\n• يتم مسح النطاق بالكامل دورياً لإعادة اكتشاف الأجهزة عند تغيير الشبكة.",
+                    text = "• إذا كنت بدون راوتر Wi-Fi، شغّل نقطة اتصال (Hotspot) على أحد الهواتف واجعل بقية الأجهزة تتصل بها.\n• لا يلزم وجود اتصال بالإنترنت أو شريحة SIM.\n• يُفضل إيقاف 'بيانات الهاتف' على جهاز البث حتى لا تستهلك الهواتف المتصلة باقتك في الخلفية.\n• يتم مسح النطاق بالكامل دورياً لإعادة اكتشاف الأجهزة عند تغيير الشبكة.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp,

@@ -73,6 +73,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _networkStatus = MutableStateFlow<NetworkStatusState>(NetworkStatusState.Connected)
     val networkStatus = _networkStatus.asStateFlow()
 
+    private val _isHotspotDataWarning = MutableStateFlow(false)
+    val isHotspotDataWarning = _isHotspotDataWarning.asStateFlow()
+    private var hotspotWarningDismissed = false
+
+    fun dismissHotspotDataWarning() {
+        hotspotWarningDismissed = true
+        _isHotspotDataWarning.value = false
+    }
+
     private val _isNotificationMuted = MutableStateFlow(false)
     val isNotificationMuted = _isNotificationMuted.asStateFlow()
 
@@ -213,6 +222,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     else -> NetworkStatusState.Connected
                 }
                 _networkStatus.value = newStatus
+
+                val isMobileData = com.example.network.NetworkUtils.isMobileDataActive(getApplication<Application>().applicationContext)
+                val isHotspot = com.example.network.NetworkUtils.isHotspotApActive()
+                if (isMobileData && isHotspot) {
+                    if (!hotspotWarningDismissed) {
+                        _isHotspotDataWarning.value = true
+                    }
+                } else {
+                    hotspotWarningDismissed = false
+                    _isHotspotDataWarning.value = false
+                }
+
                 delay(3000L)
             }
         }

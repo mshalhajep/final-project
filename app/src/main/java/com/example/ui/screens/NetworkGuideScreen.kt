@@ -244,6 +244,20 @@ fun NetworkGuideScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "💡 نصيحة ذهبية لتوفير باقتك: يُنصح بإغلاق 'بيانات الهاتف' على جهاز البث؛ التطبيق يعمل محلياً 100% ولا يحتاج إنترنت، وإغلاق البيانات يمنع هواتف أصدقائك المتصلة من استهلاك باقتك في تحديث تطبيقاتهم بالخلفية!",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
                 }
             }
         }

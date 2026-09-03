@@ -1,6 +1,8 @@
 package com.example.network
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
@@ -193,6 +195,7 @@ class LocalP2PEngine(private val context: Context) {
     }
 
     fun start() {
+        bindToLocalWifiNetworkIfAvailable()
         _localIp.value = NetworkUtils.getLocalIpAddress(context)
         multicastLock = NetworkUtils.acquireMulticastLock(context)
 
@@ -275,6 +278,40 @@ class LocalP2PEngine(private val context: Context) {
             // Ignore
         }
         NetworkUtils.releaseMulticastLock(multicastLock)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                cm?.bindProcessToNetwork(null)
+            } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Binds application process sockets to the local Wi-Fi network interface so that Android
+     * never routes P2P socket communication through mobile data when Wi-Fi has no internet.
+     */
+    fun bindToLocalWifiNetworkIfAvailable() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+                // Do not bind process to client Wi-Fi network if the phone is currently hosting a Hotspot AP
+                if (NetworkUtils.isHotspotApActive()) {
+                    return
+                }
+                val networks = cm.allNetworks
+                for (network in networks) {
+                    val caps = cm.getNetworkCapabilities(network) ?: continue
+                    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        cm.bindProcessToNetwork(network)
+                        Log.d(TAG, "Bound process to local Wi-Fi to prevent mobile data leakage")
+                        return
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to bind process to Wi-Fi network", e)
+        }
     }
 
     /**

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Icon
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.ui.NetworkStatusState
 import com.example.ui.theme.AccentRose
 
@@ -82,6 +84,104 @@ fun NetworkStatusBanner(
                     modifier = Modifier.testTag("network_status_banner_rescan_button")
                 ) {
                     Text("إعادة فحص", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Smart Warning Banner displayed when Mobile Data is active while hosting a Hotspot,
+ * alerting the user to turn off mobile data so connected devices do not consume their internet plan.
+ */
+@Composable
+fun HotspotDataSaverBanner(
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    AnimatedVisibility(
+        visible = visible,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut(),
+        modifier = modifier.testTag("hotspot_data_saver_banner")
+    ) {
+        Surface(
+            color = Color(0xFFD97706), // Amber-600 warning
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "⚠️ تنبيه: نقطة البث وبيانات الهاتف مفعّلة معاً!",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    androidx.compose.material3.IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "إغلاق",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(4.dp))
+                Text(
+                    text = "نظام أندرويد يشارك إنترنت الشريحة مع الهواتف المتصلة، مما قد يستهلك باقتك بسرعة في تحديثات هواتفهم بالخلفية. يُنصح بإيقاف 'بيانات الهاتف' لضمان عمل التطبيق محلياً وبشكل مجاني 100%.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.95f),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    androidx.compose.material3.FilledTonalButton(
+                        onClick = {
+                            try {
+                                context.startActivity(android.content.Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS).apply {
+                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                })
+                            } catch (_: Exception) {
+                                try {
+                                    context.startActivity(android.content.Intent(android.provider.Settings.ACTION_SETTINGS).apply {
+                                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    })
+                                } catch (_: Exception) {}
+                            }
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color.White,
+                            contentColor = Color(0xFF92400E)
+                        ),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 2.dp)
+                    ) {
+                        Text("إعدادات البيانات والشبكة", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

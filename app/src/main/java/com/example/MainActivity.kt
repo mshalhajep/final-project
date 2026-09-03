@@ -107,6 +107,7 @@ import com.example.ui.dialogs.ManualIpDialog
 import com.example.ui.dialogs.UserProfileDialog
 import com.example.ui.components.FloatingCallPipOverlay
 import com.example.ui.components.NetworkStatusBanner
+import com.example.ui.components.HotspotDataSaverBanner
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.ChatScreen
 import com.example.ui.screens.NetworkGuideScreen
@@ -326,6 +327,7 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
     val currentChatPeer by viewModel.currentChatPeer.collectAsState()
     val typingPeers by viewModel.typingPeers.collectAsState()
     val activeRoomInvitation by viewModel.activeRoomInvitation.collectAsState()
+    val isHotspotDataWarning by viewModel.isHotspotDataWarning.collectAsState()
     var incomingGroupCallInvite by remember { mutableStateOf<com.example.model.GroupCallInvitation?>(null) }
 
     LaunchedEffect(Unit) {
@@ -667,6 +669,12 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
             NetworkStatusBanner(
                 networkStatus = networkStatus,
                 onRescanClick = { viewModel.rescanNetwork() }
+            )
+
+            // Smart Hotspot Data-Saver Shield Banner
+            HotspotDataSaverBanner(
+                visible = isHotspotDataWarning,
+                onDismiss = { viewModel.dismissHotspotDataWarning() }
             )
 
             Box(
