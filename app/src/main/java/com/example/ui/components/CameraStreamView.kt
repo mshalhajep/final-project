@@ -46,10 +46,12 @@ fun CameraPreviewSurface(
     val isCameraOff by videoEngine.isCameraOff.collectAsState()
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
 
-    LaunchedEffect(isFrontCamera, isCameraOff, lifecycleOwner) {
+    LaunchedEffect(isFrontCamera, isCameraOff, lifecycleOwner, previewViewRef) {
         if (!isCameraOff) {
             previewViewRef?.let { pv ->
-                videoEngine.startCameraStream(lifecycleOwner, pv.surfaceProvider)
+                if (androidx.core.content.ContextCompat.checkSelfPermission(pv.context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    videoEngine.startCameraStream(lifecycleOwner, pv.surfaceProvider)
+                }
             }
         }
     }
@@ -61,7 +63,9 @@ fun CameraPreviewSurface(
                 implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                 previewViewRef = this
                 if (!isCameraOff) {
-                    videoEngine.startCameraStream(lifecycleOwner, surfaceProvider)
+                    if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        videoEngine.startCameraStream(lifecycleOwner, surfaceProvider)
+                    }
                 }
             }
         },

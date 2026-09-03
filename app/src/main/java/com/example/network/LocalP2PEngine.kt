@@ -6,7 +6,9 @@ import android.os.Build
 import android.util.Log
 import com.example.model.ActiveCall
 import com.example.model.ActiveGroupCall
+import com.example.model.CallReactionEvent
 import com.example.model.GroupCallInvitation
+import com.example.model.MsgAck
 import com.example.model.CallState
 import com.example.model.ChatMessage
 import com.example.model.ConnectionQualityLevel
@@ -31,6 +33,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import com.example.audio.VoiceNotePlayer
 import com.example.audio.VoiceNoteRecorder
+import com.example.utils.LocalNotificationManager
 import java.io.File
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -44,7 +47,10 @@ class LocalP2PEngine(private val context: Context) {
 
     companion object {
         private const val TAG = "LocalP2PEngine"
-        private const val PEER_TIMEOUT_MS = 8000L
+        // 45s: survives slow system file pickers / temporary UI stalls without
+        // marking an active user as gone (was 8s, which dropped peers mid-action).
+        private const val PEER_TIMEOUT_MS = 45_000L
+        private const val CALL_RINGING_TIMEOUT_MS = 45_000L
     }
 
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -55,6 +61,13 @@ class LocalP2PEngine(private val context: Context) {
     val fileTransferEngine = FileTransferEngine(context)
     val voiceNoteRecorder = VoiceNoteRecorder(context)
     val voiceNotePlayer = VoiceNotePlayer(context)
+
+    // RULE 3: dialing ringback, incoming ringtone + vibration, connected chime, busy tone
+    private val callToneManager = CallToneManager(context)
+
+    private var ringingTimeoutJob: Job? = null
+    private var incomingRingTimeoutJob: Job? = null
+    private var groupRingTimeoutJob: Job? = null
 
     private val nsdEngine = NetworkServiceDiscoveryEngine(context)
 
@@ -88,6 +101,14 @@ class LocalP2PEngine(private val context: Context) {
     private val _activeCall = MutableStateFlow<ActiveCall?>(null)
     val activeCall = _activeCall.asStateFlow()
 
+    // Incoming call held while the user is already in a CONNECTED call (call waiting)
+    private val _callWaitingInvite = MutableStateFlow<ActiveCall?>(null)
+    val callWaitingInvite = _callWaitingInvite.asStateFlow()
+
+    // Human-readable reason for an ended outgoing call (e.g. peer busy)
+    private val _callEndedReason = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val callEndedReason = _callEndedReason.asSharedFlow()
+
     private val _activeGroupCall = MutableStateFlow<ActiveGroupCall?>(null)
     val activeGroupCall = _activeGroupCall.asStateFlow()
 
@@ -103,6 +124,14 @@ class LocalP2PEngine(private val context: Context) {
 
     private val _incomingMessages = MutableSharedFlow<ChatMessage>(extraBufferCapacity = 64)
     val incomingMessages = _incomingMessages.asSharedFlow()
+
+    // Delivery/read acknowledgements for OUR outgoing messages (from peers)
+    private val _messageAcks = MutableSharedFlow<MsgAck>(extraBufferCapacity = 64)
+    val messageAcks = _messageAcks.asSharedFlow()
+
+    // Floating emoji reactions fired during active calls
+    private val _callReactions = MutableSharedFlow<CallReactionEvent>(extraBufferCapacity = 32)
+    val callReactions = _callReactions.asSharedFlow()
 
     private val _incomingRoomInvites = MutableSharedFlow<RoomInvitation>(extraBufferCapacity = 16)
     val incomingRoomInvites = _incomingRoomInvites.asSharedFlow()
@@ -229,6 +258,11 @@ class LocalP2PEngine(private val context: Context) {
         heartbeatJob?.cancel()
         discoveryJob?.cancel()
         cleanupJob?.cancel()
+        ringingTimeoutJob?.cancel()
+        incomingRingTimeoutJob?.cancel()
+        groupRingTimeoutJob?.cancel()
+        callToneManager.stopAll()
+        ScreenCaptureService.stop(context)
         audioEngine.stopAllAudio()
         videoEngine.stopCameraStream()
         videoEngine.stopVideoReceiver()
@@ -430,6 +464,81 @@ class LocalP2PEngine(private val context: Context) {
         broadcastPresence()
     }
 
+    // --- Message delivery/read receipts & floating call reactions ---
+
+    /**
+     * Confirms receipt of an incoming message so the sender's tick upgrades
+     * to "delivered" (double gray check).
+     */
+    fun sendMsgAck(message: ChatMessage) {
+        val senderIp = message.senderIp ?: return
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "MSG_ACK")
+                    put("msgId", message.id)
+                    put("receiverId", _userProfile.value.id)
+                }
+                sendJsonToIp(json, senderIp)
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
+
+    /**
+     * Tells the sender that their message is currently displayed on screen
+     * ("read" — double blue check).
+     */
+    fun sendMsgRead(messageId: String, senderIp: String) {
+        if (senderIp.isBlank()) return
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "MSG_READ")
+                    put("msgId", messageId)
+                    put("readerId", _userProfile.value.id)
+                }
+                sendJsonToIp(json, senderIp)
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
+
+    /**
+     * Fires a floating emoji reaction to the remote party of the active call
+     * (direct call) or to all room participants (group call).
+     */
+    fun sendCallReaction(emoji: String) {
+        if (emoji.isBlank()) return
+        val profile = _userProfile.value
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "CALL_REACTION")
+                    put("emoji", emoji)
+                    put("senderId", profile.id)
+                    put("senderName", profile.displayName.ifBlank { profile.username })
+                }
+                val call = _activeCall.value
+                val group = _activeGroupCall.value
+                when {
+                    call != null -> {
+                        json.put("callId", call.callId)
+                        sendJsonToIp(json, call.peer.ip)
+                    }
+                    group != null -> {
+                        json.put("callId", group.callId)
+                        sendJsonPacket(json)
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
+
     /**
      * Updates Audio & Video streaming targets based on who is in the current room.
      */
@@ -473,7 +582,13 @@ class LocalP2PEngine(private val context: Context) {
                 while (isActive) {
                     try {
                         multicastSocket?.receive(packet)
-                        val dataStr = String(packet.data, 0, packet.length, Charsets.UTF_8)
+                        // RULE 5: signaling payloads are AES-256-GCM encrypted; any packet
+                        // that fails AEAD authentication is silently discarded.
+                        // TODO: Optimize - pass offset/length to decrypt to avoid array copy
+                        val decryptedBytes = LocalCryptoEngine.decrypt(
+                            packet.data.copyOfRange(0, packet.length)
+                        ) ?: continue
+                        val dataStr = String(decryptedBytes, Charsets.UTF_8)
                         val senderIp = packet.address.hostAddress ?: ""
                         handleIncomingPacket(dataStr, senderIp)
                     } catch (e: Exception) {
@@ -510,8 +625,21 @@ class LocalP2PEngine(private val context: Context) {
                 delay(1200)
                 val now = System.currentTimeMillis()
                 var peersChanged = false
+
+                // Never expire peers involved in a live call or an active download:
+                // system file pickers / heavy UI can silence heartbeats for a while
+                // without the peer actually leaving the network.
+                val protectedPeerIds = buildSet {
+                    _activeCall.value?.peer?.id?.let { add(it) }
+                    _callWaitingInvite.value?.peer?.id?.let { add(it) }
+                    _activeGroupCall.value?.participants?.forEach { add(it.id) }
+                }
+                val transferRunning = fileTransferEngine.downloadingIds.value.isNotEmpty()
+
                 peersMap.entries.removeIf { (_, peer) ->
-                    val isExpired = (now - peer.lastSeen) > PEER_TIMEOUT_MS
+                    val isExpired = (now - peer.lastSeen) > PEER_TIMEOUT_MS &&
+                            peer.id !in protectedPeerIds &&
+                            !transferRunning
                     if (isExpired) peersChanged = true
                     isExpired
                 }
@@ -522,10 +650,13 @@ class LocalP2PEngine(private val context: Context) {
 
                 // Cleanup expired typing indicators (older than 3.5 seconds)
                 var typingChanged = false
-                typingMap.entries.removeIf { (_, typingPeer) ->
-                    val isExpired = (now - typingPeer.timestamp) > 3500L
-                    if (isExpired) typingChanged = true
-                    isExpired
+                val iterator = typingMap.entries.iterator()
+                while (iterator.hasNext()) {
+                    val entry = iterator.next()
+                    if ((now - entry.value.timestamp) > 3500L) {
+                        typingChanged = true
+                        iterator.remove()
+                    }
                 }
                 if (typingChanged) {
                     _typingPeers.value = typingMap.values.toList()
@@ -570,7 +701,11 @@ class LocalP2PEngine(private val context: Context) {
         content: String,
         isDirect: Boolean = false,
         imageBase64: String? = null,
-        messageType: MessageType = MessageType.TEXT
+        messageType: MessageType = MessageType.TEXT,
+        fileId: String? = null,
+        fileName: String? = null,
+        fileSize: Long = 0L,
+        mimeType: String? = null
     ): ChatMessage {
         val msgId = UUID.randomUUID().toString()
         val chatMessage = ChatMessage(
@@ -584,7 +719,11 @@ class LocalP2PEngine(private val context: Context) {
             timestamp = System.currentTimeMillis(),
             isMine = true,
             messageType = messageType,
-            imageBase64 = imageBase64
+            imageBase64 = imageBase64,
+            fileId = fileId,
+            fileName = fileName,
+            fileSize = fileSize,
+            mimeType = mimeType
         )
 
         scope.launch {
@@ -603,6 +742,10 @@ class LocalP2PEngine(private val context: Context) {
                     if (imageBase64 != null) {
                         put("image", imageBase64)
                     }
+                    fileId?.let { put("fileId", it) }
+                    fileName?.let { put("fileName", it) }
+                    if (fileSize > 0) put("fileSize", fileSize)
+                    mimeType?.let { put("mimeType", it) }
                 }
 
                 if (isDirect) {
@@ -623,11 +766,78 @@ class LocalP2PEngine(private val context: Context) {
         return chatMessage
     }
 
+    // --- Audio session keys (8 bytes, stamped into every audio packet header) ---
+    private fun callSessionKey(callId: String) = callId.take(AudioEngine.HEADER_SESSION_SIZE)
+    private fun groupSessionKey(callId: String) = ("gr" + callId.take(6)).take(AudioEngine.HEADER_SESSION_SIZE)
+    private fun roomSessionKey(roomId: String) = ("rm" + roomId.take(6)).take(AudioEngine.HEADER_SESSION_SIZE)
+
+    /**
+     * RULE 1.2: room voice audio only flows once the user explicitly joins the room
+     * voice channel; joining authorizes the matching playback session as well.
+     * Refuses to start while a call owns the microphone.
+     */
+    fun startRoomVoiceSession() {
+        if (_activeCall.value != null || _activeGroupCall.value != null) return
+        val roomId = _currentRoom.value
+        audioEngine.authorizeSession(roomSessionKey(roomId))
+        audioEngine.setOpenMic(true)
+        updateRoomAudioTargets(roomId)
+        audioEngine.startAudioRecording(_userProfile.value.id, roomId, roomSessionKey(roomId))
+    }
+
+    fun stopRoomVoiceSession() {
+        audioEngine.setOpenMic(false)
+        audioEngine.setPushToTalk(false)
+        audioEngine.stopAudioRecording()
+        audioEngine.revokeSession()
+    }
+
+    // Room-voice suspension bookkeeping across a call's lifetime
+    private var roomVoiceSuspendedForCall = false
+
+    /**
+     * Releases the room open-mic before a call claims the microphone. Without this,
+     * the AudioRecord session is already active so the call's recording silently
+     * fails (early-return) AND the room keeps hearing the private call audio.
+     */
+    private fun suspendRoomVoiceForCall() {
+        if (audioEngine.isRecording.value || audioEngine.isOpenMic.value) {
+            roomVoiceSuspendedForCall = true
+            audioEngine.setOpenMic(false)
+            audioEngine.setPushToTalk(false)
+            audioEngine.stopAudioRecording()
+            audioEngine.revokeSession()
+        }
+    }
+
+    /** Restores the room open-mic session suspended when the call started. */
+    private fun resumeRoomVoiceAfterCall() {
+        if (roomVoiceSuspendedForCall) {
+            roomVoiceSuspendedForCall = false
+            startRoomVoiceSession()
+        } else {
+            updateRoomAudioTargets(_currentRoom.value)
+        }
+    }
+
+    /** Stops the incoming call ringtone/vibration when a group invite is dismissed. */
+    fun dismissIncomingGroupCallRing() {
+        groupRingTimeoutJob?.cancel()
+        groupRingTimeoutJob = null
+        callToneManager.stopAll()
+    }
+
     /**
      * Initiates a 1-to-1 Call with another peer.
+     * RULE 3: the caller immediately hears the international ringback tone, and the
+     * call auto-ends after 45 seconds if it is never answered.
      */
     fun startCall(peer: Peer, isVideo: Boolean) {
         val callId = UUID.randomUUID().toString()
+
+        // The private call now owns the microphone — suspend the room open mic
+        suspendRoomVoiceForCall()
+
         _activeCall.value = ActiveCall(
             callId = callId,
             peer = peer,
@@ -638,6 +848,9 @@ class LocalP2PEngine(private val context: Context) {
             isCameraOff = videoEngine.isCameraOff.value,
             isFrontCamera = videoEngine.isFrontCamera.value
         )
+
+        callToneManager.playRingback()
+        scheduleOutgoingRingTimeout(callId)
 
         // Set audio/video targets
         try {
@@ -664,11 +877,120 @@ class LocalP2PEngine(private val context: Context) {
         }
     }
 
+    private fun scheduleOutgoingRingTimeout(callId: String) {
+        ringingTimeoutJob?.cancel()
+        ringingTimeoutJob = scope.launch {
+            delay(CALL_RINGING_TIMEOUT_MS)
+            val call = _activeCall.value
+            if (call != null && call.callId == callId && call.state == CallState.OUTGOING_RINGING) {
+                Log.i(TAG, "انتهت مهلة الرنين (45 ثانية) — إنهاء المكالمة: لا يوجد رد")
+                endCall()
+            }
+        }
+    }
+
+    private fun scheduleIncomingRingTimeout(callId: String) {
+        incomingRingTimeoutJob?.cancel()
+        incomingRingTimeoutJob = scope.launch {
+            delay(CALL_RINGING_TIMEOUT_MS)
+            val call = _activeCall.value
+            if (call != null && call.callId == callId && call.state == CallState.INCOMING_RINGING) {
+                Log.i(TAG, "انتهت مهلة رنين المكالمة الواردة (45 ثانية) — رفض تلقائي")
+                callToneManager.stopAll()
+                _activeCall.value = null
+                resumeRoomVoiceAfterCall()
+            }
+        }
+    }
+
+    private var waitingRingTimeoutJob: Job? = null
+
+    private fun scheduleWaitingRingTimeout(callId: String) {
+        waitingRingTimeoutJob?.cancel()
+        waitingRingTimeoutJob = scope.launch {
+            delay(CALL_RINGING_TIMEOUT_MS)
+            val waiting = _callWaitingInvite.value
+            if (waiting != null && waiting.callId == callId) {
+                declineWaitingCall(reason = "انتهت مهلة انتظار المكالمة")
+            }
+        }
+    }
+
     /**
-     * Answers an incoming call.
+     * Promotes a held call-waiting invite to the active call: the current call is
+     * ended silently first, then the waiting call enters the normal accept flow.
+     */
+    fun acceptWaitingCall() {
+        val waiting = _callWaitingInvite.value ?: return
+        _callWaitingInvite.value = null
+        waitingRingTimeoutJob?.cancel()
+        callToneManager.stopAll()
+
+        val current = _activeCall.value
+        if (current != null) {
+            _activeCall.value = null
+            stopCallQualityMonitor()
+            audioEngine.revokeSession()
+            audioEngine.stopAudioRecording()
+            videoEngine.stopCameraStream()
+            audioEngine.removeTarget(current.peer.id)
+            videoEngine.removeTarget(current.peer.id)
+            scope.launch {
+                try {
+                    val json = JSONObject().apply {
+                        put("type", "CALL_END")
+                        put("callId", current.callId)
+                    }
+                    sendJsonToIp(json, current.peer.ip)
+                } catch (e: Exception) {
+                    // Ignore
+                }
+            }
+        }
+
+        _activeCall.value = waiting
+        acceptCall()
+    }
+
+    /** Declines a held call-waiting invite and notifies the waiting caller. */
+    fun declineWaitingCall(reason: String = "رفض المستخدم المكالمة") {
+        val waiting = _callWaitingInvite.value ?: return
+        _callWaitingInvite.value = null
+        waitingRingTimeoutJob?.cancel()
+        callToneManager.stopAll()
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "CALL_BUSY")
+                    put("callId", waiting.callId)
+                    put("reason", reason)
+                }
+                sendJsonToIp(json, waiting.peer.ip)
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
+
+    /** Shows a full-priority incoming call notification when the app is backgrounded. */
+    private fun maybeShowIncomingCallNotification(callerName: String, callId: String, isVideo: Boolean) {
+        if (!LocalNotificationManager.isAppInForeground) {
+            LocalNotificationManager.showIncomingCallNotification(context, callerName, callId, isVideo)
+        }
+    }
+
+    /**
+     * Answers an incoming call. Recording + playback open ONLY here (state = CONNECTED).
      */
     fun acceptCall() {
         val currentCall = _activeCall.value ?: return
+        ringingTimeoutJob?.cancel()
+        incomingRingTimeoutJob?.cancel()
+        waitingRingTimeoutJob?.cancel()
+        _callWaitingInvite.value = null
+        callToneManager.stopAll()
+        callToneManager.playConnectedChime()
+
         val updatedCall = currentCall.copy(
             state = CallState.CONNECTED,
             startTime = System.currentTimeMillis(),
@@ -688,11 +1010,11 @@ class LocalP2PEngine(private val context: Context) {
             Log.e(TAG, "Error setting call target", e)
         }
 
-        audioEngine.startAudioPlayback()
-        audioEngine.startAudioRecording(_userProfile.value.id, "call_${currentCall.callId}")
-        if (currentCall.isVideo) {
-            videoEngine.startVideoReceiver()
-        }
+        // RULE 1: microphone transmission and playback start strictly on acceptance.
+        // Video receiver always runs so remote screen shares reach audio-only calls too.
+        audioEngine.authorizeSession(callSessionKey(currentCall.callId))
+        audioEngine.startAudioRecording(_userProfile.value.id, "call_${currentCall.callId}", callSessionKey(currentCall.callId))
+        videoEngine.startVideoReceiver()
         startCallQualityMonitor(currentCall.callId, currentCall.peer.ip, currentCall.isVideo)
 
         scope.launch {
@@ -730,26 +1052,53 @@ class LocalP2PEngine(private val context: Context) {
         _activeCall.value = _activeCall.value?.copy(isSpeakerOn = audioEngine.isSpeakerOn.value)
     }
 
-    fun startCallScreenShare(appName: String, frameProvider: () -> android.graphics.Bitmap?) {
-        videoEngine.startScreenShare(appName, frameProvider)
+    // --- RULE 2: Real MediaProjection screen sharing (foreground service driven) ---
+
+    /**
+     * Starts the real screen broadcast: launches the mediaProjection foreground
+     * service, routes captured frames into the video engine, and notifies the peer.
+     */
+    fun startRealScreenShare(appName: String, resultCode: Int, projectionData: android.content.Intent) {
+        ScreenCaptureService.onFrameCaptured = { bitmap ->
+            videoEngine.sendDirectScreenShareBitmap(bitmap, appName)
+        }
+        ScreenCaptureService.onShareStopped = { onScreenShareServiceStopped() }
+        ScreenCaptureService.start(context, resultCode, projectionData, appName)
+
         _activeCall.value = _activeCall.value?.copy(
             isScreenSharing = true,
             screenSharedAppName = appName
         )
+        _activeGroupCall.value = _activeGroupCall.value?.copy(
+            isScreenSharing = true,
+            screenSharedAppName = appName
+        )
         sendCallControl(isScreenSharing = true, screenSharedAppName = appName)
+        sendGroupCallControl(isScreenSharing = true, screenSharedAppName = appName)
     }
 
-    fun sendCallScreenShareFrame(bitmap: android.graphics.Bitmap, appName: String) {
-        videoEngine.sendDirectScreenShareBitmap(bitmap, appName)
-    }
-
-    fun stopCallScreenShare() {
+    fun stopRealScreenShare() {
+        ScreenCaptureService.stop(context)
         videoEngine.stopScreenShare()
+        clearScreenShareState()
+    }
+
+    private fun onScreenShareServiceStopped() {
+        videoEngine.stopScreenShare()
+        clearScreenShareState()
+    }
+
+    private fun clearScreenShareState() {
         _activeCall.value = _activeCall.value?.copy(
             isScreenSharing = false,
             screenSharedAppName = null
         )
+        _activeGroupCall.value = _activeGroupCall.value?.copy(
+            isScreenSharing = false,
+            screenSharedAppName = null
+        )
         sendCallControl(isScreenSharing = false, screenSharedAppName = "")
+        sendGroupCallControl(isScreenSharing = false, screenSharedAppName = "")
     }
 
     private fun sendCallControl(
@@ -896,13 +1245,27 @@ class LocalP2PEngine(private val context: Context) {
         _activeCall.value = null
         stopCallQualityMonitor()
 
+        ringingTimeoutJob?.cancel()
+        incomingRingTimeoutJob?.cancel()
+        waitingRingTimeoutJob?.cancel()
+        _callWaitingInvite.value = null
+        callToneManager.stopAll()
+        LocalNotificationManager.cancelCallNotification(context)
+
+        audioEngine.revokeSession()
         audioEngine.stopAudioRecording()
         videoEngine.stopCameraStream()
         audioEngine.removeTarget(currentCall.peer.id)
         videoEngine.removeTarget(currentCall.peer.id)
 
-        // Restore room audio targets
-        updateRoomAudioTargets(_currentRoom.value)
+        // Restore the room voice session if it was suspended when the call started
+        resumeRoomVoiceAfterCall()
+
+        // A ringing/connected call that is actively ended plays the ended cadence;
+        // declining a never-connected incoming call stays silent.
+        if (currentCall.state == CallState.CONNECTED || currentCall.state == CallState.OUTGOING_RINGING) {
+            callToneManager.playDisconnectedTone()
+        }
 
         scope.launch {
             val json = JSONObject().apply {
@@ -914,11 +1277,14 @@ class LocalP2PEngine(private val context: Context) {
     }
 
     /**
-     * Starts a room-wide Group Video & Audio Call.
+     * Starts a room-wide Group Video & Audio Call (initiator explicitly launched it).
      */
     fun startGroupVideoCall(roomId: String, roomName: String) {
         val callId = UUID.randomUUID().toString()
         val roomPeers = peersMap.values.filter { it.currentRoom == roomId && it.id != _userProfile.value.id }
+
+        // The group call owns the microphone now (room open mic would collide with it)
+        suspendRoomVoiceForCall()
 
         _activeGroupCall.value = ActiveGroupCall(
             callId = callId,
@@ -936,8 +1302,8 @@ class LocalP2PEngine(private val context: Context) {
 
         updateRoomAudioTargets(roomId)
 
-        audioEngine.startAudioPlayback()
-        audioEngine.startAudioRecording(_userProfile.value.id, "group_$callId")
+        audioEngine.authorizeSession(groupSessionKey(callId))
+        audioEngine.startAudioRecording(_userProfile.value.id, "group_$callId", groupSessionKey(callId))
         videoEngine.startVideoReceiver()
 
         scope.launch {
@@ -965,11 +1331,20 @@ class LocalP2PEngine(private val context: Context) {
     }
 
     /**
-     * Joins an ongoing Group Video & Audio Call.
+     * Joins an ongoing Group Video & Audio Call — RULE 1: recording and playback
+     * start ONLY when the user explicitly clicks "Join Call", never on invite receipt.
      */
     fun joinGroupVideoCall(invitation: GroupCallInvitation) {
+        groupRingTimeoutJob?.cancel()
+        groupRingTimeoutJob = null
+        callToneManager.stopAll()
+        callToneManager.playConnectedChime()
+
         setRoom(invitation.roomId)
         val roomPeers = peersMap.values.filter { it.currentRoom == invitation.roomId && it.id != _userProfile.value.id }
+
+        // The group call owns the microphone now (room open mic would collide with it)
+        suspendRoomVoiceForCall()
 
         _activeGroupCall.value = ActiveGroupCall(
             callId = invitation.callId,
@@ -987,8 +1362,8 @@ class LocalP2PEngine(private val context: Context) {
 
         updateRoomAudioTargets(invitation.roomId)
 
-        audioEngine.startAudioPlayback()
-        audioEngine.startAudioRecording(_userProfile.value.id, "group_${invitation.callId}")
+        audioEngine.authorizeSession(groupSessionKey(invitation.callId))
+        audioEngine.startAudioRecording(_userProfile.value.id, "group_${invitation.callId}", groupSessionKey(invitation.callId))
         videoEngine.startVideoReceiver()
 
         scope.launch {
@@ -1019,7 +1394,9 @@ class LocalP2PEngine(private val context: Context) {
     fun leaveGroupVideoCall() {
         val currentGroupCall = _activeGroupCall.value ?: return
         _activeGroupCall.value = null
+        callToneManager.stopAll()
 
+        audioEngine.revokeSession()
         audioEngine.stopAudioRecording()
         videoEngine.stopCameraStream()
 
@@ -1037,7 +1414,8 @@ class LocalP2PEngine(private val context: Context) {
             }
         }
 
-        updateRoomAudioTargets(_currentRoom.value)
+        // Resume the room voice session if it was suspended when the group call started
+        resumeRoomVoiceAfterCall()
     }
 
     fun toggleGroupCallMic() {
@@ -1062,28 +1440,6 @@ class LocalP2PEngine(private val context: Context) {
     fun toggleGroupCallSpeaker() {
         audioEngine.toggleSpeaker()
         _activeGroupCall.value = _activeGroupCall.value?.copy(isSpeakerOn = audioEngine.isSpeakerOn.value)
-    }
-
-    fun startGroupCallScreenShare(appName: String, frameProvider: () -> android.graphics.Bitmap?) {
-        videoEngine.startScreenShare(appName, frameProvider)
-        _activeGroupCall.value = _activeGroupCall.value?.copy(
-            isScreenSharing = true,
-            screenSharedAppName = appName
-        )
-        sendGroupCallControl(isScreenSharing = true, screenSharedAppName = appName)
-    }
-
-    fun sendGroupCallScreenShareFrame(bitmap: android.graphics.Bitmap, appName: String) {
-        videoEngine.sendDirectScreenShareBitmap(bitmap, appName)
-    }
-
-    fun stopGroupCallScreenShare() {
-        videoEngine.stopScreenShare()
-        _activeGroupCall.value = _activeGroupCall.value?.copy(
-            isScreenSharing = false,
-            screenSharedAppName = null
-        )
-        sendGroupCallControl(isScreenSharing = false, screenSharedAppName = "")
     }
 
     private fun sendGroupCallControl(
@@ -1313,7 +1669,7 @@ class LocalP2PEngine(private val context: Context) {
                     )
                     peersMap[callerId] = peer
 
-                    _activeCall.value = ActiveCall(
+                    val incomingCall = ActiveCall(
                         callId = callId,
                         peer = peer,
                         isVideo = isVideo,
@@ -1323,6 +1679,43 @@ class LocalP2PEngine(private val context: Context) {
                         isCameraOff = videoEngine.isCameraOff.value,
                         isFrontCamera = videoEngine.isFrontCamera.value
                     )
+
+                    // Busy-state protection: NEVER clobber an active call with a new invite
+                    val currentCall = _activeCall.value
+                    when {
+                        // In a live call -> offer call waiting (keep the current call intact)
+                        currentCall != null && currentCall.state == CallState.CONNECTED -> {
+                            _callWaitingInvite.value = incomingCall
+                            callToneManager.playIncomingRingtone()
+                            scheduleWaitingRingTimeout(callId)
+                        }
+                        // Outgoing/incoming already ringing or a group call is live -> busy
+                        currentCall != null || _activeGroupCall.value != null -> {
+                            scope.launch {
+                                try {
+                                    val busyJson = JSONObject().apply {
+                                        put("type", "CALL_BUSY")
+                                        put("callId", callId)
+                                        put("reason", "المستخدم مشغول في مكالمة أخرى")
+                                    }
+                                    sendJsonToIp(busyJson, senderIp)
+                                } catch (e: Exception) {
+                                    // Ignore
+                                }
+                            }
+                        }
+                        // Free -> normal incoming call flow
+                        else -> {
+                            // Stop the room open mic before accepting the incoming call
+                            suspendRoomVoiceForCall()
+                            _activeCall.value = incomingCall
+
+                            // RULE 3: incoming ringtone + repeating haptics; NEVER any audio channel
+                            callToneManager.playIncomingRingtone()
+                            scheduleIncomingRingTimeout(callId)
+                            maybeShowIncomingCallNotification(callerName, callId, isVideo)
+                        }
+                    }
                 }
 
                 "CALL_ACCEPT" -> {
@@ -1330,6 +1723,10 @@ class LocalP2PEngine(private val context: Context) {
                     val acceptorAvatarBase64 = json.optString("acceptorAvatarBase64").takeIf { it.isNotBlank() }
                     val currentCall = _activeCall.value
                     if (currentCall != null && currentCall.callId == callId) {
+                        ringingTimeoutJob?.cancel()
+                        callToneManager.stopAll()
+                        callToneManager.playConnectedChime()
+
                         val updatedPeer = if (acceptorAvatarBase64 != null) {
                             currentCall.peer.copy(avatarBase64 = acceptorAvatarBase64)
                         } else currentCall.peer
@@ -1340,8 +1737,8 @@ class LocalP2PEngine(private val context: Context) {
                             startTime = System.currentTimeMillis()
                         )
                         _activeCall.value = updatedCall
-                        audioEngine.startAudioPlayback()
-                        audioEngine.startAudioRecording(_userProfile.value.id, "call_$callId")
+                        audioEngine.authorizeSession(callSessionKey(callId))
+                        audioEngine.startAudioRecording(_userProfile.value.id, "call_$callId", callSessionKey(callId))
                         if (currentCall.isVideo) {
                             videoEngine.startVideoReceiver()
                         }
@@ -1378,9 +1775,44 @@ class LocalP2PEngine(private val context: Context) {
                     if (currentCall != null && currentCall.callId == callId) {
                         _activeCall.value = null
                         stopCallQualityMonitor()
+
+                        ringingTimeoutJob?.cancel()
+                        incomingRingTimeoutJob?.cancel()
+                        waitingRingTimeoutJob?.cancel()
+                        _callWaitingInvite.value = null
+                        callToneManager.stopAll()
+                        callToneManager.playDisconnectedTone()
+
+                        audioEngine.revokeSession()
                         audioEngine.stopAudioRecording()
                         videoEngine.stopCameraStream()
-                        updateRoomAudioTargets(_currentRoom.value)
+                        resumeRoomVoiceAfterCall()
+                    } else {
+                        // The waiting invite's caller may have hung up
+                        val waiting = _callWaitingInvite.value
+                        if (waiting != null && waiting.callId == callId) {
+                            declineWaitingCall(reason = "أنهى المتصل المحاولة")
+                        }
+                    }
+                }
+
+                "CALL_BUSY" -> {
+                    val callId = json.optString("callId")
+                    val reason = json.optString("reason", "المستخدم مشغول في مكالمة أخرى")
+                    val currentCall = _activeCall.value
+                    if (currentCall != null && currentCall.callId == callId && currentCall.state == CallState.OUTGOING_RINGING) {
+                        _activeCall.value = null
+                        stopCallQualityMonitor()
+
+                        ringingTimeoutJob?.cancel()
+                        // Stop the ringback, then signal the busy cadence to the caller
+                        callToneManager.stopAll()
+                        callToneManager.playDisconnectedTone()
+                        audioEngine.removeTarget(currentCall.peer.id)
+                        videoEngine.removeTarget(currentCall.peer.id)
+                        resumeRoomVoiceAfterCall()
+
+                        _callEndedReason.tryEmit(reason)
                     }
                 }
 
@@ -1464,6 +1896,15 @@ class LocalP2PEngine(private val context: Context) {
                         timestamp = timestamp
                     )
 
+                    // RULE 1: invitation only — no audio channel is opened here.
+                    // RULE 3: incoming ringtone + haptics, auto-stopped after 45s.
+                    callToneManager.playIncomingRingtone()
+                    groupRingTimeoutJob?.cancel()
+                    groupRingTimeoutJob = scope.launch {
+                        delay(CALL_RINGING_TIMEOUT_MS)
+                        callToneManager.stopAll()
+                    }
+
                     _incomingGroupCallInvite.tryEmit(invite)
                 }
 
@@ -1509,6 +1950,37 @@ class LocalP2PEngine(private val context: Context) {
                 "GROUP_CALL_CONTROL" -> {
                     // Update peer states in active group call
                 }
+
+                "MSG_ACK" -> {
+                    val msgId = json.optString("msgId")
+                    val receiverId = json.optString("receiverId")
+                    if (msgId.isNotEmpty() && receiverId != _userProfile.value.id) {
+                        _messageAcks.tryEmit(MsgAck(messageId = msgId, isRead = false))
+                    }
+                }
+
+                "MSG_READ" -> {
+                    val msgId = json.optString("msgId")
+                    val readerId = json.optString("readerId")
+                    if (msgId.isNotEmpty() && readerId != _userProfile.value.id) {
+                        _messageAcks.tryEmit(MsgAck(messageId = msgId, isRead = true))
+                    }
+                }
+
+                "CALL_REACTION" -> {
+                    val senderId = json.optString("senderId")
+                    if (senderId == _userProfile.value.id) return
+                    val emoji = json.optString("emoji")
+                    if (emoji.isNotEmpty()) {
+                        _callReactions.tryEmit(
+                            CallReactionEvent(
+                                emoji = emoji,
+                                senderId = senderId,
+                                senderName = json.optString("senderName", "")
+                            )
+                        )
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling incoming packet", e)
@@ -1516,7 +1988,7 @@ class LocalP2PEngine(private val context: Context) {
     }
 
     private suspend fun sendJsonPacket(json: JSONObject) {
-        val bytes = json.toString().toByteArray(Charsets.UTF_8)
+        val bytes = LocalCryptoEngine.encryptJson(json.toString())
         if (broadcastSocket == null) {
             broadcastSocket = DatagramSocket().apply { broadcast = true }
         }
@@ -1541,7 +2013,7 @@ class LocalP2PEngine(private val context: Context) {
     }
 
     private suspend fun sendJsonToIp(json: JSONObject, ip: String) {
-        val bytes = json.toString().toByteArray(Charsets.UTF_8)
+        val bytes = LocalCryptoEngine.encryptJson(json.toString())
         if (broadcastSocket == null) {
             broadcastSocket = DatagramSocket()
         }
@@ -1611,8 +2083,15 @@ class LocalP2PEngine(private val context: Context) {
         discoveryJob?.cancel()
         heartbeatJob?.cancel()
         cleanupJob?.cancel()
+        ringingTimeoutJob?.cancel()
+        incomingRingTimeoutJob?.cancel()
+        groupRingTimeoutJob?.cancel()
         typingMap.clear()
         _typingPeers.value = emptyList()
+        callToneManager.stopAll()
+        ScreenCaptureService.stop(context)
+        ScreenCaptureService.onFrameCaptured = null
+        ScreenCaptureService.onShareStopped = null
         multicastSocket?.close()
         multicastSocket = null
         broadcastSocket?.close()

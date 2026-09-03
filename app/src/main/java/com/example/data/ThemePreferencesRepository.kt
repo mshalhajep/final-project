@@ -29,6 +29,8 @@ class ThemePreferencesRepository(private val context: Context) {
     val themeModeFlow: Flow<ThemeMode> = context.dataStore.data
         .catch { exception ->
             if (exception is IOException) {
+                // Return defaults instead of deleting the file
+                android.util.Log.e("ThemePrefs", "DataStore corruption, returning defaults", exception)
                 emit(emptyPreferences())
             } else {
                 throw exception

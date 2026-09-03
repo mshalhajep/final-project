@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
@@ -47,6 +48,7 @@ import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -70,6 +72,7 @@ import com.example.ui.components.UserStatusBadge
 import com.example.ui.components.UserStatusDot
 import com.example.ui.components.UserStatusQuickDropdown
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -116,27 +119,67 @@ import com.example.ui.theme.PrimaryPurple
 import com.example.ui.theme.PrimaryPurpleLight
 import com.example.ui.theme.SecondarySlate
 import com.example.ui.theme.StatusGreen
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        /** Live video-call marker so PiP is entered only for video calls. */
+        @Volatile
+        var isVideoCallActiveForPip: Boolean = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme {
-                RootApp()
+            // Theme selected in settings (DARK/LIGHT/SYSTEM) is bound at the root so
+            // switching applies instantly instead of always following the system.
+            val viewModel: MainViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+            val themeMode by viewModel.themeMode.collectAsState()
+            val systemDarkTheme = androidx.compose.foundation.isSystemInDarkTheme()
+            com.example.ui.theme.MyApplicationTheme(
+                darkTheme = when (themeMode) {
+                    com.example.data.ThemeMode.DARK -> true
+                    com.example.data.ThemeMode.LIGHT -> false
+                    com.example.data.ThemeMode.SYSTEM -> systemDarkTheme
+                }
+            ) {
+                RootApp(viewModel = viewModel)
             }
         }
+        handleNavigationIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleNavigationIntent(intent)
+    }
+
+    private fun handleNavigationIntent(intent: Intent?) {
+        val target = intent?.getStringExtra("openTarget") ?: return
+        if (target == "call") {
+            // Incoming call notification tapped: bringing activity to front is sufficient
+            return
+        }
+        val isDirect = intent.getBooleanExtra("isDirect", false)
+        com.example.utils.NotificationNavigation.openChat.value = target to isDirect
     }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        // PiP only for active video calls — audio-only calls and normal browsing
+        // must not pop a picture-in-picture window.
+        if (!isVideoCallActiveForPip) return
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            try {
-                val params = android.app.PictureInPictureParams.Builder()
-                    .setAspectRatio(android.util.Rational(9, 16))
-                    .build()
-                enterPictureInPictureMode(params)
-            } catch (_: Exception) {}
+            if (packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+                try {
+                    val params = android.app.PictureInPictureParams.Builder()
+                        .setAspectRatio(android.util.Rational(9, 16))
+                        .build()
+                    enterPictureInPictureMode(params)
+                } catch (_: Exception) {}
+            }
         }
     }
 }
@@ -178,7 +221,37 @@ fun RootApp(viewModel: MainViewModel = viewModel()) {
 fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compose.viewModel()) {
     val context = LocalContext.current
 
-    // Request Audio & Camera Permissions
+    // App foreground state gates notification emission; returning to the app clears
+    // stale message notifications.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            val resumed = event == androidx.lifecycle.Lifecycle.Event.ON_RESUME
+            com.example.utils.LocalNotificationManager.setAppInForeground(resumed)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Open the chat tapped from a message notification
+    LaunchedEffect(Unit) {
+        com.example.utils.NotificationNavigation.openChat.collect { nav ->
+            if (nav != null) {
+                com.example.utils.NotificationNavigation.openChat.value = null
+                viewModel.openChatFromNotification(nav.first, nav.second)
+            }
+        }
+    }
+
+    // Surface remote busy/ended reasons from outgoing calls
+    val toastContext = LocalContext.current
+    LaunchedEffect(Unit) {
+        viewModel.callEndedReason.collect { reason ->
+            android.widget.Toast.makeText(toastContext, reason, android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Request Audio, Camera & Notification Permissions
     val permissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { _ -> }
@@ -188,11 +261,50 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.CAMERA
         )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            permissions.add(Manifest.permission.READ_MEDIA_IMAGES)
+            permissions.add(Manifest.permission.READ_MEDIA_VIDEO)
+            permissions.add(Manifest.permission.READ_MEDIA_AUDIO)
+        } else if (android.os.Build.VERSION.SDK_INT < 29) {
+            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
         val missing = permissions.filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }
         if (missing.isNotEmpty()) {
             permissionsLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    // RULE 2: real screen sharing — MediaProjection consent flow + foreground service
+    var pendingScreenShareAppName by remember { mutableStateOf("شاشة النظام") }
+    val mediaProjectionManager = remember {
+        context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE)
+                as? android.media.projection.MediaProjectionManager
+    }
+    val screenCaptureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
+            viewModel.startRealScreenShare(
+                appName = pendingScreenShareAppName,
+                resultCode = result.resultCode,
+                projectionData = result.data!!
+            )
+        }
+    }
+    fun requestScreenShare(appName: String) {
+        pendingScreenShareAppName = appName
+        try {
+            val captureIntent = mediaProjectionManager?.createScreenCaptureIntent() ?: return
+            screenCaptureLauncher.launch(captureIntent)
+        } catch (_: Exception) {
         }
     }
 
@@ -204,6 +316,7 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
     val userProfile by viewModel.userProfile.collectAsState()
     val localIp by viewModel.localIp.collectAsState()
     val activeCall by viewModel.activeCall.collectAsState()
+    val callWaitingInvite by viewModel.callWaitingInvite.collectAsState()
     val activeGroupCall by viewModel.activeGroupCall.collectAsState()
     val callSignalInfo by viewModel.callSignalInfo.collectAsState()
     val messages by viewModel.messages.collectAsState()
@@ -243,6 +356,19 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
     val isVideoStreaming by viewModel.isVideoStreaming.collectAsState()
     val remoteVideoFrames by viewModel.remoteVideoFrames.collectAsState()
     val callVolume by viewModel.callVolume.collectAsState()
+    val playbackSpeed by viewModel.playbackSpeed.collectAsState()
+
+    // Floating call emoji reactions (pruned after their animation window)
+    val callReactions = remember { androidx.compose.runtime.mutableStateListOf<com.example.model.CallReactionEvent>() }
+    LaunchedEffect(Unit) {
+        viewModel.callReactions.collect { event -> callReactions.add(event) }
+    }
+    LaunchedEffect(callReactions.size) {
+        if (callReactions.isNotEmpty()) {
+            delay(3200)
+            callReactions.removeAll { System.currentTimeMillis() - it.id > 3200 }
+        }
+    }
 
     // Scanning states
     val isScanning by viewModel.isScanning.collectAsState()
@@ -266,6 +392,13 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
         if (activeCall == null || activeCall?.state == com.example.model.CallState.ENDED || activeCall?.state == com.example.model.CallState.IDLE) {
             isCallMinimizedToPip = false
         }
+    }
+
+    // PiP entry marker: video calls only (audio calls / idle app never enter PiP)
+    LaunchedEffect(activeCall, activeGroupCall) {
+        MainActivity.isVideoCallActiveForPip =
+            (activeCall?.isVideo == true && activeCall?.state == com.example.model.CallState.CONNECTED) ||
+                    activeGroupCall != null
     }
 
     LaunchedEffect(activeGroupCall) {
@@ -298,10 +431,10 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.WifiTethering,
+                                imageVector = com.example.ui.theme.AppIcons.P2PRadar,
                                 contentDescription = null,
                                 tint = Color.White,
-                                modifier = Modifier.size(17.dp)
+                                modifier = Modifier.size(19.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(8.dp))
@@ -570,6 +703,8 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         playingVoiceMessageId = playingVoiceMessageId,
                         voiceNoteProgress = voiceNoteProgress,
                         voiceNoteCurrentMs = voiceNoteCurrentMs,
+                        playbackSpeed = playbackSpeed,
+                        onCyclePlaybackSpeed = { viewModel.cyclePlaybackSpeed() },
                         onUserTyping = { isTyping -> viewModel.onUserTyping(isTyping) },
                         onStartVoiceRecording = { viewModel.startVoiceRecording() },
                         onStopAndSendVoiceNote = { viewModel.stopAndSendInRoomVoiceNote() },
@@ -595,6 +730,7 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         onSendInRoomMessage = { text, bitmap -> viewModel.sendInRoomMessage(text, bitmap) },
                         onSendInRoomFile = { uri, caption -> viewModel.sendInRoomFile(uri, caption) },
                         onDownloadFile = { msg -> viewModel.downloadMessageFile(msg) },
+                        onCancelDownloadFile = { msg -> viewModel.cancelDownloadFile(msg) },
                         onOpenFile = { msg -> viewModel.openMessageFile(msg) },
                         onDirectCallPeer = { peer, isVideo -> viewModel.startCall(peer, isVideo) },
                         onClearRoomJoinError = { viewModel.clearRoomJoinError() },
@@ -639,6 +775,8 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         playingVoiceMessageId = playingVoiceMessageId,
                         voiceNoteProgress = voiceNoteProgress,
                         voiceNoteCurrentMs = voiceNoteCurrentMs,
+                        playbackSpeed = playbackSpeed,
+                        onCyclePlaybackSpeed = { viewModel.cyclePlaybackSpeed() },
                         onUserTyping = { isTyping -> viewModel.onUserTyping(isTyping) },
                         onStartVoiceRecording = { viewModel.startVoiceRecording() },
                         onStopAndSendVoiceNote = { viewModel.stopAndSendVoiceNote() },
@@ -648,6 +786,7 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         onSendMessage = { text, bitmap -> viewModel.sendMessage(text, bitmap) },
                         onSendFile = { uri, caption -> viewModel.sendDirectFile(uri, caption) },
                         onDownloadFile = { msg -> viewModel.downloadMessageFile(msg) },
+                        onCancelDownloadFile = { msg -> viewModel.cancelDownloadFile(msg) },
                         onOpenFile = { msg -> viewModel.openMessageFile(msg) },
                         onCallPeer = { peer, isVideo -> viewModel.startCall(peer, isVideo) },
                         onEditMessage = { id, text -> viewModel.editMessage(id, text) },
@@ -689,11 +828,11 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                     onToggleCameraLens = { viewModel.switchCallCamera() },
                     onToggleCameraOff = { viewModel.toggleCallCamera() },
                     onSetVolume = { vol -> viewModel.setCallVolume(vol) },
-                    onStartScreenShare = { appName, frameProvider ->
-                        viewModel.startCallScreenShare(appName, frameProvider)
-                    },
-                    onStopScreenShare = { viewModel.stopCallScreenShare() },
-                    onMinimize = { isCallMinimizedToPip = true }
+                    onStartScreenShare = { appName -> requestScreenShare(appName) },
+                    onStopScreenShare = { viewModel.stopRealScreenShare() },
+                    onMinimize = { isCallMinimizedToPip = true },
+                    reactions = callReactions.toList(),
+                    onSendReaction = { emoji -> viewModel.sendCallReaction(emoji) }
                 )
             }
 
@@ -714,14 +853,11 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                     onToggleCamera = { viewModel.toggleGroupCallCamera() },
                     onSwitchCamera = { viewModel.switchGroupCallCamera() },
                     onVolumeChanged = { vol -> viewModel.setCallVolume(vol) },
-                    onStartScreenShare = { appName, frameProvider ->
-                        viewModel.startGroupCallScreenShare(appName, frameProvider)
-                    },
-                    onSendScreenShareFrame = { bmp, appName ->
-                        viewModel.sendGroupCallScreenShareFrame(bmp, appName)
-                    },
-                    onStopScreenShare = { viewModel.stopGroupCallScreenShare() },
-                    onMinimize = { isGroupCallMinimizedToPip = true }
+                    onStartScreenShare = { appName -> requestScreenShare(appName) },
+                    onStopScreenShare = { viewModel.stopRealScreenShare() },
+                    onMinimize = { isGroupCallMinimizedToPip = true },
+                    reactions = callReactions.toList(),
+                    onSendReaction = { emoji -> viewModel.sendCallReaction(emoji) }
                 )
             }
 
@@ -763,8 +899,15 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
       }
     }
 
-    // Incoming Group Call Dialog
+    // Incoming Group Call Dialog (auto-dismisses when the 45s ring timeout elapses)
     incomingGroupCallInvite?.let { invite ->
+        LaunchedEffect(invite.callId) {
+            delay(45_000L)
+            if (incomingGroupCallInvite?.callId == invite.callId) {
+                viewModel.dismissIncomingGroupCallRing()
+                incomingGroupCallInvite = null
+            }
+        }
         IncomingGroupCallDialog(
             invitation = invite,
             onAccept = {
@@ -774,6 +917,28 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
             },
             onDecline = {
                 incomingGroupCallInvite = null
+                viewModel.dismissIncomingGroupCallRing()
+            }
+        )
+    }
+
+    // Call waiting: an incoming call held while the user is already connected
+    callWaitingInvite?.let { waiting ->
+        AlertDialog(
+            onDismissRequest = { viewModel.declineWaitingCall() },
+            title = { Text("مكالمة واردة أخرى", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("${waiting.peer.name} يتصل بك أثناء مكالمتك الحالية. القبول سينهي المكالمة الحالية ويربطك به مباشرة.")
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.acceptWaitingCall() }) {
+                    Text("قبول وإنهاء الحالية", color = AccentGreen, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.declineWaitingCall() }) {
+                    Text("رفض", color = AccentRose)
+                }
             }
         )
     }

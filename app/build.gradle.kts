@@ -1,4 +1,11 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import org.gradle.api.DefaultTask
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+import java.io.File
 
 plugins {
   alias(libs.plugins.android.application)
@@ -11,7 +18,7 @@ plugins {
 
 android {
   namespace = "com.example"
-  compileSdk { version = release(36) { minorApiLevel = 1 } }
+  compileSdk = 36
 
   defaultConfig {
     applicationId = "com.aistudio.localconnect.qazx"
@@ -47,6 +54,14 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
+  }
+  packaging {
+    resources {
+      // Prevent duplicate-license packaging failures when crypto/socket libs merge
+      excludes += "/META-INF/{AL2.0,LGPL2.1}"
+      excludes += "META-INF/DEPENDENCIES"
+      excludes += "META-INF/INDEX.LIST"
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -135,4 +150,59 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+// Room 2.7.0 KSP codegen can emit localized (Arabic-Indic) digit literals into
+// generated Kotlin when the OS regional format is Arabic, producing invalid code.
+// Normalize every generated source right after the KSP task finishes.
+abstract class NormalizeGeneratedDigitsTask : DefaultTask() {
+
+  @get:InputDirectory
+  @get:PathSensitive(PathSensitivity.NONE)
+  abstract val generatedDir: Property<File>
+
+  @TaskAction
+  fun normalize() {
+    val root = generatedDir.get()
+    if (!root.exists()) return
+    val arabicDigits = mapOf(
+      '٠' to '0', '١' to '1', '٢' to '2', '٣' to '3', '٤' to '4',
+      '٥' to '5', '٦' to '6', '٧' to '7', '٨' to '8', '٩' to '9'
+    )
+    var fixedFiles = 0
+    root.walkTopDown()
+      .filter { file -> file.isFile && file.extension == "kt" }
+      .forEach { file ->
+        val text = file.readText()
+        if (arabicDigits.keys.any { text.contains(it) }) {
+          var normalized = text
+          for ((arabic, latin) in arabicDigits) {
+            normalized = normalized.replace(arabic, latin)
+          }
+          file.writeText(normalized)
+          fixedFiles++
+        }
+      }
+    if (fixedFiles > 0) {
+      logger.lifecycle("normalizeGeneratedDigits: fixed $fixedFiles generated file(s)")
+    }
+  }
+}
+
+val generatedKspRoot: File = layout.buildDirectory.dir("generated/ksp").get().asFile
+
+val normalizeGeneratedDigits = tasks.register(
+  "normalizeGeneratedDigits",
+  NormalizeGeneratedDigitsTask::class.java
+) {
+  generatedDir.set(generatedKspRoot)
+  outputs.upToDateWhen { false }
+}
+
+tasks.matching { it.name.startsWith("ksp") && it.name.endsWith("Kotlin") }.configureEach {
+  finalizedBy(normalizeGeneratedDigits)
+}
+
+tasks.matching { it.name == "compileDebugKotlin" || it.name == "compileReleaseKotlin" }.configureEach {
+  dependsOn(normalizeGeneratedDigits)
 }

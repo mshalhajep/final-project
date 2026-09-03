@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Mic
@@ -52,6 +53,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,10 +65,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,14 +93,21 @@ import com.example.model.RoomInfo
 import com.example.model.TypingPeer
 import com.example.network.NetworkUtils
 import com.example.ui.components.ChatMessageBubble
+import com.example.ui.components.ChatListItem
 import com.example.ui.components.ChatTypingIndicator
+import com.example.ui.components.DateHeaderChip
+import com.example.ui.components.ImageViewerDialog
 import com.example.ui.components.TypingDotsAnimation
 import com.example.ui.components.UserStatusBadge
 import com.example.ui.components.UserStatusDot
+import com.example.ui.components.buildChatListItems
 import com.example.ui.theme.AccentRose
 import com.example.ui.theme.PrimaryCyan
 import com.example.ui.theme.PrimaryPurple
 import com.example.ui.theme.SecondaryTeal
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -114,6 +128,8 @@ fun ChatScreen(
     playingVoiceMessageId: String? = null,
     voiceNoteProgress: Float = 0f,
     voiceNoteCurrentMs: Int = 0,
+    playbackSpeed: Float = 1f,
+    onCyclePlaybackSpeed: () -> Unit = {},
     onUserTyping: (Boolean) -> Unit = {},
     onStartVoiceRecording: () -> Unit = {},
     onStopAndSendVoiceNote: () -> Unit = {},
@@ -123,6 +139,7 @@ fun ChatScreen(
     onSendMessage: (text: String, bitmap: Bitmap?) -> Unit,
     onSendFile: (Uri, String) -> Unit = { _, _ -> },
     onDownloadFile: (ChatMessage) -> Unit = {},
+    onCancelDownloadFile: (ChatMessage) -> Unit = {},
     onOpenFile: (ChatMessage) -> Unit = {},
     onCallPeer: (Peer, Boolean) -> Unit,
     onEditMessage: (String, String) -> Unit = { _, _ -> },
@@ -132,14 +149,21 @@ fun ChatScreen(
     rooms: List<RoomInfo> = emptyList()
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var inputText by remember { mutableStateOf("") }
     var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var forwardingMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var viewingImage by remember { mutableStateOf<ChatMessage?>(null) }
     var selectedImageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
     var selectedFileSize by remember { mutableStateOf(0L) }
     val listState = rememberLazyListState()
+
+    // Stop the live typing indicator the moment this chat screen leaves composition
+    DisposableEffect(Unit) {
+        onDispose { onUserTyping(false) }
+    }
 
     // Active typing peers in the current chat target
     val activeTypingPeers = remember(typingPeers, currentTarget, isDirectChat, currentPeer) {
@@ -166,13 +190,15 @@ fun ChatScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            try {
-                val stream = context.contentResolver.openInputStream(uri)
-                selectedImageBitmap = BitmapFactory.decodeStream(stream)
-                selectedFileUri = null
-                selectedFileName = null
-            } catch (e: Exception) {
-                e.printStackTrace()
+            // Sub-sampled decode (max 1280px) — raw 4K decodes allocate 50MB+ and OOM
+            scope.launch(Dispatchers.IO) {
+                val bmp = com.example.utils.StorageUtils.decodeSampledBitmap(context, uri)
+                withContext(Dispatchers.Main) {
+                    selectedImageBitmap = bmp
+                    selectedFileUri = null
+                    selectedFileName = null
+                    selectedFileSize = 0L
+                }
             }
         }
     }
@@ -394,31 +420,109 @@ fun ChatScreen(
                     )
                 }
             } else {
+                // WhatsApp-style day dividers ("اليوم"/"أمس"/date) + Telegram-style
+                // scroll-to-bottom FAB with a missed-message badge.
+                val chatListItems = remember(messages) { buildChatListItems(messages) }
+                val isNearBottom by remember {
+                    derivedStateOf {
+                        val info = listState.layoutInfo
+                        val lastVisible = info.visibleItemsInfo.lastOrNull()
+                        lastVisible == null || info.totalItemsCount == 0 ||
+                                lastVisible.index >= info.totalItemsCount - 2
+                    }
+                }
+                var missedCount by remember { mutableIntStateOf(0) }
+                var lastSeenCount by remember { mutableIntStateOf(0) }
+                LaunchedEffect(chatListItems.size) {
+                    if (chatListItems.size > lastSeenCount) {
+                        if (!isNearBottom) missedCount += chatListItems.size - lastSeenCount
+                        if (isNearBottom) {
+                            listState.animateScrollToItem(chatListItems.size - 1)
+                        }
+                    }
+                    lastSeenCount = chatListItems.size
+                }
+
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(messages) { message ->
-                        ChatMessageBubble(
-                            message = message,
-                            downloadProgress = downloadProgressMap[message.id] ?: 0f,
-                            isDownloading = downloadingIds.contains(message.id),
-                            onDownloadClick = onDownloadFile,
-                            onOpenFileClick = onOpenFile,
-                            isPlayingVoiceNote = isPlayingVoiceNote,
-                            playingVoiceMessageId = playingVoiceMessageId,
-                            voiceNoteProgress = voiceNoteProgress,
-                            voiceNoteCurrentMs = voiceNoteCurrentMs,
-                            onTogglePlayVoiceNote = onTogglePlayVoiceNote,
-                            onSeekVoiceNote = onSeekVoiceNote,
-                            onEditClick = { msg -> editingMessage = msg },
-                            onDeleteClick = { msg -> onDeleteMessage(msg.id) },
-                            onForwardClick = { msg -> forwardingMessage = msg }
-                        )
+                    items(chatListItems, key = { it.key }) { item ->
+                        when (item) {
+                            is ChatListItem.DateHeader -> DateHeaderChip(item.text)
+                            is ChatListItem.Message -> ChatMessageBubble(
+                                message = item.message,
+                                downloadProgress = downloadProgressMap[item.message.id] ?: 0f,
+                                isDownloading = downloadingIds.contains(item.message.id),
+                                onDownloadClick = onDownloadFile,
+                                onOpenFileClick = onOpenFile,
+                                isPlayingVoiceNote = isPlayingVoiceNote,
+                                playingVoiceMessageId = playingVoiceMessageId,
+                                voiceNoteProgress = voiceNoteProgress,
+                                voiceNoteCurrentMs = voiceNoteCurrentMs,
+                                playbackSpeed = playbackSpeed,
+                                onTogglePlayVoiceNote = onTogglePlayVoiceNote,
+                                onSeekVoiceNote = onSeekVoiceNote,
+                                onCyclePlaybackSpeed = onCyclePlaybackSpeed,
+                                onOpenImage = { msg -> viewingImage = msg },
+                                onEditClick = { msg -> editingMessage = msg },
+                                onDeleteClick = { msg -> onDeleteMessage(msg.id) },
+                                onForwardClick = { msg -> forwardingMessage = msg },
+                                onCancelDownloadClick = onCancelDownloadFile
+                            )
+                        }
                     }
                 }
+
+                if (!isNearBottom) {
+                    val scrollScope = rememberCoroutineScope()
+                    FloatingActionButton(
+                        onClick = {
+                            scrollScope.launch {
+                                if (chatListItems.isNotEmpty()) {
+                                    listState.animateScrollToItem(chatListItems.size - 1)
+                                }
+                            }
+                            missedCount = 0
+                        },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(16.dp)
+                            .testTag("scroll_to_bottom_fab")
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                if (missedCount > 0) {
+                                    Badge(containerColor = com.example.ui.theme.StatusGreen) {
+                                        Text("$missedCount")
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = "الانتقال لآخر الرسائل"
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Fullscreen in-app image viewer with pinch zoom
+            viewingImage?.let { imageMessage ->
+                ImageViewerDialog(
+                    message = imageMessage,
+                    onDismiss = { viewingImage = null },
+                    onDownloadClick = {
+                        viewingImage = null
+                        onDownloadFile(imageMessage)
+                    },
+                    onOpenFile = { onOpenFile(imageMessage) }
+                )
             }
 
             if (forwardingMessage != null) {

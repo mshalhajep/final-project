@@ -697,15 +697,17 @@ private fun PeerDetailCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Avatar with presence status dot
-                val avatarBmp = androidx.compose.runtime.remember(peer.avatarBase64) {
+                val avatarBmpState = androidx.compose.runtime.remember(peer.avatarBase64) { androidx.compose.runtime.mutableStateOf<android.graphics.Bitmap?>(null) }
+                val avatarBmp = avatarBmpState.value
+                androidx.compose.runtime.LaunchedEffect(peer.avatarBase64) {
                     if (!peer.avatarBase64.isNullOrBlank()) {
-                        try {
-                            val bytes = Base64.decode(peer.avatarBase64, Base64.DEFAULT)
-                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        } catch (e: Exception) {
-                            null
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            try {
+                                val bytes = Base64.decode(peer.avatarBase64, Base64.DEFAULT)
+                                avatarBmpState.value = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            } catch (e: Throwable) { /* ignore */ }
                         }
-                    } else null
+                    }
                 }
 
                 Box(
@@ -823,7 +825,7 @@ private fun PeerDetailCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("صوت", style = MaterialTheme.typography.labelSmall)
+                    Text("صوت", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
 
                 // Video Call
@@ -839,7 +841,7 @@ private fun PeerDetailCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("فيديو", style = MaterialTheme.typography.labelSmall)
+                    Text("فيديو", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
 
                 // Direct Chat
@@ -855,7 +857,7 @@ private fun PeerDetailCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("محادثة", style = MaterialTheme.typography.labelSmall)
+                    Text("محادثة", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
             }
         }

@@ -21,6 +21,8 @@ import com.example.model.RoomInvitation
 import com.example.model.UserProfile
 import com.example.model.UserPresenceStatus
 import com.example.network.LocalP2PEngine
+import com.example.utils.CallNotificationReceiver
+import com.example.utils.LocalNotificationManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -60,6 +62,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val engine = LocalP2PEngine(application.applicationContext)
 
+    init {
+        // Notifications: channels + incoming-call Accept/Decline actions
+        LocalNotificationManager.ensureChannels(application.applicationContext)
+        CallNotificationReceiver.handler = { accept ->
+            if (accept) acceptCall() else endCall()
+        }
+    }
+
     private val _networkStatus = MutableStateFlow<NetworkStatusState>(NetworkStatusState.Connected)
     val networkStatus = _networkStatus.asStateFlow()
 
@@ -74,7 +84,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         application.applicationContext,
         AppDatabase::class.java,
         "offline_p2p_chat.db"
-    ).fallbackToDestructiveMigration().build()
+    )
+        .addMigrations(AppDatabase.MIGRATION_6_7)
+        .fallbackToDestructiveMigration()
+        .build()
 
     private val chatDao = db.chatDao()
 
@@ -132,6 +145,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val userProfile = engine.userProfile
     val localIp = engine.localIp
     val activeCall = engine.activeCall
+    val callWaitingInvite = engine.callWaitingInvite
+    val callEndedReason = engine.callEndedReason
     val activeGroupCall = engine.activeGroupCall
     val incomingGroupCallInvite = engine.incomingGroupCallInvite
     val callSignalInfo = engine.callSignalInfo
@@ -152,11 +167,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val voiceRecordingCurrentAmp = engine.voiceNoteRecorder.currentAmplitude
 
     // Voice Note Playback Flows
-    val playingVoiceMessageId = engine.voiceNotePlayer.currentlyPlayingId
     val isPlayingVoiceNote = engine.voiceNotePlayer.isPlaying
+    val playingVoiceMessageId = engine.voiceNotePlayer.currentlyPlayingId
     val voiceNoteProgress = engine.voiceNotePlayer.playbackProgress
     val voiceNoteCurrentMs = engine.voiceNotePlayer.currentPositionMs
     val voiceNoteDurationMs = engine.voiceNotePlayer.durationMs
+    val playbackSpeed = engine.voiceNotePlayer.playbackSpeed
+
+    /** Cycles voice note playback speed 1.0x -> 1.5x -> 2.0x -> 1.0x. */
+    fun cyclePlaybackSpeed() {
+        engine.voiceNotePlayer.cyclePlaybackSpeed()
+    }
+
+    // Floating emoji reactions fired during active calls
+    val callReactions = engine.callReactions
+
+    fun sendCallReaction(emoji: String) {
+        engine.sendCallReaction(emoji)
+    }
 
     // Wi-Fi Local Network Scan Flows
     val isScanning = engine.isScanning
@@ -230,10 +258,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 )
 
+                // Confirm delivery back to the sender (double gray check)
+                engine.sendMsgAck(msg)
+
+                // Heads-up message notification while the app is backgrounded and notifications are not muted
+                if (!LocalNotificationManager.isAppInForeground && !_isNotificationMuted.value) {
+                    val preview = when (msg.messageType) {
+                        MessageType.IMAGE -> "📷 أرسل صورة"
+                        MessageType.VOICE_NOTE -> "🎙️ أرسل رسالة صوتية"
+                        MessageType.FILE -> "📄 ${msg.fileName ?: "ملف"}"
+                        else -> msg.content
+                    }
+                    val notificationTarget = if (msg.isDirect) msg.senderId else msg.targetRoomOrPeerId
+                    LocalNotificationManager.showMessageNotification(
+                        application.applicationContext,
+                        notificationTarget,
+                        msg.isDirect,
+                        msg.senderName,
+                        preview
+                    )
+                }
+
                 // Auto-download voice notes and images from peer for instant listening/viewing
                 if ((msg.messageType == MessageType.VOICE_NOTE || msg.messageType == MessageType.IMAGE) && msg.fileId != null && msg.senderIp != null) {
                     downloadMessageFile(msg)
                 }
+            }
+        }
+
+        // Upgrade delivery ticks of our own outgoing messages from peer ACKs
+        viewModelScope.launch(Dispatchers.IO) {
+            engine.messageAcks.collectLatest { ack ->
+                val status = if (ack.isRead) com.example.model.DELIVERY_READ else com.example.model.DELIVERY_DELIVERED
+                chatDao.upgradeMessageDeliveryStatus(ack.messageId, status)
             }
         }
 
@@ -248,6 +305,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         observeCurrentChatMessages()
         observeActiveRoomMessages()
     }
+
+    /** Message ids already confirmed as "read" to their senders (guard against ACK spam). */
+    private val readReceiptsSent = java.util.Collections.synchronizedSet(
+        LinkedHashSet<String>()
+    )
 
     private fun observeCurrentChatMessages() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -276,9 +338,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             localFilePath = it.localFilePath,
                             isDownloaded = it.isDownloaded || it.isMine,
                             isRead = it.isRead,
-                            isEdited = it.isEdited
+                            isEdited = it.isEdited,
+                            deliveryStatus = it.deliveryStatus
                         )
                     }
+                    sendReadReceipts(entities)
                 }
             }
         }
@@ -313,12 +377,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             localFilePath = it.localFilePath,
                             isDownloaded = it.isDownloaded || it.isMine,
                             isRead = it.isRead,
-                            isEdited = it.isEdited
+                            isEdited = it.isEdited,
+                            deliveryStatus = it.deliveryStatus
                         )
                     }
+                    sendReadReceipts(entities)
                 }
             }
         }
+    }
+
+    /**
+     * Marks displayed incoming messages as READ back to their senders
+     * (double blue check). The in-memory set prevents duplicate receipts.
+     */
+    private fun sendReadReceipts(entities: List<ChatMessageEntity>) {
+        if (readReceiptsSent.size > 5000) {
+            val toRemove = readReceiptsSent.take(1000)
+            readReceiptsSent.removeAll(toRemove.toSet())
+        }
+        entities.filter { !it.isMine && !it.senderIp.isNullOrBlank() && it.deliveryStatus < 2 }
+            .forEach { entity ->
+                if (readReceiptsSent.add(entity.id)) {
+                    engine.sendMsgRead(entity.id, entity.senderIp!!)
+                }
+            }
     }
 
     private suspend fun checkUserSession() {
@@ -586,13 +669,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val newState = !_isGroupCallActive.value
         _isGroupCallActive.value = newState
         if (newState) {
-            engine.audioEngine.startRecording(userProfile.value.id, currentRoom.value)
-            engine.audioEngine.startPlayback()
-            engine.audioEngine.setOpenMic(true)
+            // RULE 1.2: room voice session opens only through this explicit toggle
+            engine.startRoomVoiceSession()
         } else {
-            engine.audioEngine.setOpenMic(false)
-            engine.audioEngine.setPushToTalk(false)
-            engine.audioEngine.stopAllAudio()
+            engine.stopRoomVoiceSession()
         }
     }
 
@@ -601,6 +681,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _currentChatIsDirect.value = true
         _currentChatPeer.value = peer
         _selectedTab.value = AppTab.CHAT
+        LocalNotificationManager.cancelTargetNotification(getApplication(), peer.id)
     }
 
     fun openRoomChat(roomId: String) {
@@ -608,6 +689,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _currentChatIsDirect.value = false
         _currentChatPeer.value = null
         _selectedTab.value = AppTab.CHAT
+        LocalNotificationManager.cancelTargetNotification(getApplication(), roomId)
     }
 
     fun setUserStatus(status: UserPresenceStatus) {
@@ -751,16 +833,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val callVolume = engine.audioEngine.callVolume
 
-    fun startCallScreenShare(appName: String, frameProvider: () -> Bitmap?) {
-        engine.startCallScreenShare(appName, frameProvider)
+    // --- RULE 2: Real MediaProjection screen sharing (foreground service) ---
+
+    fun startRealScreenShare(appName: String, resultCode: Int, projectionData: android.content.Intent) {
+        engine.startRealScreenShare(appName, resultCode, projectionData)
     }
 
-    fun sendCallScreenShareFrame(bitmap: Bitmap, appName: String) {
-        engine.sendCallScreenShareFrame(bitmap, appName)
+    fun stopRealScreenShare() {
+        engine.stopRealScreenShare()
     }
 
-    fun stopCallScreenShare() {
-        engine.stopCallScreenShare()
+    fun dismissIncomingGroupCallRing() {
+        engine.dismissIncomingGroupCallRing()
+    }
+
+    // --- Call waiting (incoming call while already in a CONNECTED call) ---
+
+    fun acceptWaitingCall() {
+        engine.acceptWaitingCall()
+    }
+
+    fun declineWaitingCall() {
+        engine.declineWaitingCall()
+    }
+
+    /** Opens a chat screen tapped from a message notification. */
+    fun openChatFromNotification(targetId: String, isDirect: Boolean) {
+        LocalNotificationManager.cancelTargetNotification(getApplication(), targetId)
+        if (isDirect) {
+            val peer = discoveredPeers.value.find { it.id == targetId }
+                ?: Peer(id = targetId, name = targetId, ip = "")
+            openDirectChat(peer)
+        } else {
+            openRoomChat(targetId)
+        }
     }
 
     // --- Group Video & Audio Call Actions ---
@@ -791,18 +897,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleGroupCallSpeaker() {
         engine.toggleGroupCallSpeaker()
-    }
-
-    fun startGroupCallScreenShare(appName: String, frameProvider: () -> Bitmap?) {
-        engine.startGroupCallScreenShare(appName, frameProvider)
-    }
-
-    fun sendGroupCallScreenShareFrame(bitmap: Bitmap, appName: String) {
-        engine.sendGroupCallScreenShareFrame(bitmap, appName)
-    }
-
-    fun stopGroupCallScreenShare() {
-        engine.stopGroupCallScreenShare()
     }
 
     // --- Theme & Appearance Settings (DataStore Persistence) ---
@@ -1153,13 +1247,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 fileId = fileId,
                 fileName = fileName,
                 expectedSize = message.fileSize,
-                senderIp = senderIp
+                senderIp = senderIp,
+                mimeType = message.mimeType
             )
 
             if (downloadedFile != null && downloadedFile.exists()) {
                 chatDao.updateMessageFileDownloaded(message.id, downloadedFile.absolutePath)
             }
         }
+    }
+
+    /**
+     * Cancels an ongoing file download, preserving partial downloaded bytes on disk for resumption.
+     */
+    fun cancelDownloadFile(message: ChatMessage) {
+        engine.fileTransferEngine.cancelDownload(message.id)
     }
 
     /**
@@ -1344,7 +1446,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     fileId = fileId,
                     fileName = fileName,
                     expectedSize = message.fileSize,
-                    senderIp = senderIp
+                    senderIp = senderIp,
+                    mimeType = message.mimeType
                 )
                 if (downloadedFile != null && downloadedFile.exists()) {
                     chatDao.updateMessageFileDownloaded(message.id, downloadedFile.absolutePath)

@@ -60,9 +60,30 @@ object NetworkUtils {
     }
 
     /**
-     * Determines the broadcast address for the local subnet.
+     * Determines the best broadcast address for LAN peer discovery.
+     *
+     * Priority 1 — Subnet-directed broadcast collected from LIVE network interfaces
+     * (wlan0, hotspot ap0, rndis0/usb tethering, eth0). This is the only reliable
+     * path when the phone acts as a Hotspot router: dhcpInfo is null/0 in AP mode
+     * and the kernel usually drops global 255.255.255.255 datagrams.
+     * Priority 2 — DHCP-derived broadcast (classic DHCP-client Wi-Fi).
+     * Priority 3 — Global broadcast fallback.
      */
+    // For API 31+, prefer NetworkInterface-based approach
     fun getBroadcastAddress(context: Context): InetAddress {
+        // Try NetworkInterface first (works on all versions)
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val ni = interfaces.nextElement()
+                if (ni.isLoopback || !ni.isUp) continue
+                for (ia in ni.interfaceAddresses) {
+                    ia.broadcast?.let { return it }
+                }
+            }
+        } catch (_: Exception) {}
+
+        // Fallback to deprecated method for older devices
         try {
             val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             val dhcp = wifi?.dhcpInfo

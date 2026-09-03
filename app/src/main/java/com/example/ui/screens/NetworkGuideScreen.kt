@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,12 +41,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.example.data.ThemeMode
 import com.example.model.UserProfile
 import com.example.ui.components.AudioWaveformVisualizer
@@ -97,6 +103,22 @@ fun NetworkGuideScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Real profile avatar: base64 photo -> file photo -> initials
+                        val avatarBitmapState = remember(userProfile.avatarBase64) { androidx.compose.runtime.mutableStateOf<android.graphics.Bitmap?>(null) }
+                        val avatarBitmap = avatarBitmapState.value
+                        androidx.compose.runtime.LaunchedEffect(userProfile.avatarBase64) {
+                            userProfile.avatarBase64?.let { base64Str ->
+                                if (base64Str.isNotBlank()) {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        try {
+                                            val bytes = android.util.Base64.decode(base64Str, android.util.Base64.DEFAULT)
+                                            avatarBitmapState.value = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                        } catch (e: Throwable) { /* ignore */ }
+                                    }
+                                }
+                            }
+                        }
+
                         Box(
                             modifier = Modifier
                                 .size(56.dp)
@@ -104,12 +126,36 @@ fun NetworkGuideScreen(
                                 .background(Color(userProfile.avatarColor)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Person,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(32.dp)
-                            )
+                            when {
+                                avatarBitmap != null -> {
+                                    Image(
+                                        bitmap = avatarBitmap.asImageBitmap(),
+                                        contentDescription = userProfile.username,
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(CircleShape),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                                !userProfile.avatarUri.isNullOrBlank() -> {
+                                    AsyncImage(
+                                        model = userProfile.avatarUri,
+                                        contentDescription = userProfile.username,
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(CircleShape),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                                else -> {
+                                    Text(
+                                        text = userProfile.username.take(2).uppercase(),
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.width(14.dp))
@@ -125,12 +171,14 @@ fun NetworkGuideScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Text(
-                                text = "عنوانك المحلي: $localIp",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = PrimaryCyan,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            androidx.compose.foundation.text.selection.SelectionContainer {
+                                Text(
+                                    text = "عنوانك المحلي: $localIp",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = PrimaryCyan,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
 

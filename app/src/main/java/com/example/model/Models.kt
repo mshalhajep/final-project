@@ -88,6 +88,14 @@ enum class MessageType {
 }
 
 /**
+ * Delivery lifecycle of an outgoing chat message:
+ * 0 = SENT (left the device), 1 = DELIVERED (peer confirmed receipt), 2 = READ.
+ */
+const val DELIVERY_SENT = 0
+const val DELIVERY_DELIVERED = 1
+const val DELIVERY_READ = 2
+
+/**
  * Chat message model.
  */
 data class ChatMessage(
@@ -112,7 +120,26 @@ data class ChatMessage(
     val downloadProgress: Float = 0f,
     val isDownloaded: Boolean = false,
     val isRead: Boolean = true,
-    val isEdited: Boolean = false
+    val isEdited: Boolean = false,
+    val deliveryStatus: Int = DELIVERY_SENT
+)
+
+/**
+ * Floating emoji reaction fired during an active call.
+ */
+data class CallReactionEvent(
+    val id: Long = System.currentTimeMillis(),
+    val emoji: String,
+    val senderId: String,
+    val senderName: String
+)
+
+/**
+ * Delivery/read acknowledgement received for one of our outgoing messages.
+ */
+data class MsgAck(
+    val messageId: String,
+    val isRead: Boolean
 )
 
 /**

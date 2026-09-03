@@ -1,18 +1,14 @@
 package com.example.ui.dialogs
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
 import android.util.Base64
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,45 +25,41 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.filled.CloseFullscreen
-import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PresentToAll
-import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.StopScreenShare
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.VolumeDown
-import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -77,9 +69,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -90,22 +82,34 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.example.model.ActiveCall
+import com.example.model.CallReactionEvent
 import com.example.model.CallState
+import com.example.model.ConnectionQualityLevel
 import com.example.model.Peer
 import com.example.model.PeerSignalInfo
 import com.example.model.PeerVideoFrame
 import com.example.network.VideoEngine
 import com.example.ui.components.AudioWaveformVisualizer
+import com.example.ui.components.CallEmojiPickerRow
+import com.example.ui.components.CallReactionOverlay
 import com.example.ui.components.CameraPreviewSurface
 import com.example.ui.components.RemotePeerVideoView
+import com.example.ui.components.rememberFloatingReactions
 import com.example.ui.theme.AccentGreen
 import com.example.ui.theme.AccentRose
+import com.example.ui.theme.AppIcons
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.PrimaryCyan
 import com.example.ui.theme.PrimaryPurple
 import com.example.ui.theme.StatusGreen
 import kotlinx.coroutines.delay
 
+/**
+ * RULE 4: ergonomic 3-tier call screen.
+ * Tier 1 top bar: encryption badge, duration timer, signal quality, minimize to PiP.
+ * Tier 2 bottom dock: mic / camera / speaker / more + red End Call (max 5 items).
+ * Tier 3 "More Options" bottom sheet: screen share, camera lens, volume, diagnostics.
+ */
 @Composable
 fun CallScreenDialog(
     activeCall: ActiveCall,
@@ -124,13 +128,14 @@ fun CallScreenDialog(
     onToggleCameraLens: () -> Unit,
     onToggleCameraOff: () -> Unit,
     onSetVolume: (Float) -> Unit = {},
-    onStartScreenShare: (String, () -> Bitmap?) -> Unit = { _, _ -> },
+    onStartScreenShare: (String) -> Unit = {},
     onStopScreenShare: () -> Unit = {},
-    onMinimize: () -> Unit = {}
+    onMinimize: () -> Unit = {},
+    reactions: List<CallReactionEvent> = emptyList(),
+    onSendReaction: (String) -> Unit = {}
 ) {
     var callSeconds by remember { mutableStateOf(0) }
-    var showVolumeDialog by remember { mutableStateOf(false) }
-    var showScreenSharePicker by remember { mutableStateOf(false) }
+    var showMoreOptionsSheet by remember { mutableStateOf(false) }
 
     LaunchedEffect(activeCall.state) {
         if (activeCall.state == CallState.CONNECTED) {
@@ -144,7 +149,7 @@ fun CallScreenDialog(
 
     val minutes = callSeconds / 60
     val seconds = callSeconds % 60
-    val durationText = String.format("%02d:%02d", minutes, seconds)
+    val durationText = "\u200E${String.format("%02d:%02d", minutes, seconds)}"
 
     Dialog(
         onDismissRequest = onMinimize,
@@ -181,15 +186,18 @@ fun CallScreenDialog(
                         isMuted = isMuted,
                         isSpeakerOn = isSpeakerOn,
                         callVolume = callVolume,
+                        signalInfo = signalInfo,
                         onEnd = onEnd,
                         onToggleMute = onToggleMute,
                         onToggleSpeaker = onToggleSpeaker,
                         onToggleCameraLens = onToggleCameraLens,
                         onToggleCameraOff = onToggleCameraOff,
-                        onOpenVolumeDialog = { showVolumeDialog = true },
-                        onOpenScreenSharePicker = { showScreenSharePicker = true },
+                        onSetVolume = onSetVolume,
+                        onStartScreenShare = onStartScreenShare,
                         onStopScreenShare = onStopScreenShare,
-                        onMinimize = onMinimize
+                        onMinimize = onMinimize,
+                        onOpenMoreOptions = { showMoreOptionsSheet = true },
+                        onSendReaction = onSendReaction
                     )
                 }
 
@@ -198,25 +206,32 @@ fun CallScreenDialog(
                 }
             }
 
-            // Volume Adjustment Floating Dialog
-            if (showVolumeDialog) {
-                CallVolumeDialog(
-                    currentVolume = callVolume,
-                    onVolumeChanged = onSetVolume,
-                    onDismiss = { showVolumeDialog = false }
-                )
-            }
+            // Floating emoji reactions layer (rises above the control dock)
+            val floatingReactions = rememberFloatingReactions(reactions)
+            CallReactionOverlay(floatingReactions)
 
-            // Screen Sharing App Picker Dialog
-            if (showScreenSharePicker) {
-                ScreenShareAppPickerDialog(
-                    onAppSelected = { appName ->
-                        onStartScreenShare(appName) {
-                            generateScreenShareFrame(appName, System.currentTimeMillis())
+            // Tier 3: More Options bottom sheet
+            if (showMoreOptionsSheet && activeCall.state == CallState.CONNECTED) {
+                CallMoreOptionsSheet(
+                    isVideoCall = activeCall.isVideo,
+                    isCameraOff = activeCall.isCameraOff,
+                    isScreenSharing = activeCall.isScreenSharing,
+                    callVolume = callVolume,
+                    signalInfo = signalInfo,
+                    onDismiss = { showMoreOptionsSheet = false },
+                    onSetVolume = onSetVolume,
+                    onToggleScreenShare = {
+                        showMoreOptionsSheet = false
+                        if (activeCall.isScreenSharing) {
+                            onStopScreenShare()
+                        } else {
+                            onStartScreenShare("شاشة النظام")
                         }
-                        showScreenSharePicker = false
                     },
-                    onDismiss = { showScreenSharePicker = false }
+                    onSwitchCameraLens = {
+                        showMoreOptionsSheet = false
+                        onToggleCameraLens()
+                    }
                 )
             }
         }
@@ -276,229 +291,297 @@ private fun PeerAvatarDisplay(
     }
 }
 
+/** Animated expanding radial waves behind a ringing avatar. */
+@Composable
+private fun RingingWavesAvatar(
+    peer: Peer,
+    avatarSize: androidx.compose.ui.unit.Dp = 130.dp
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "radar_waves")
+    val waveProgress by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween<Float>(2400, easing = LinearEasing)
+        ),
+        label = "waveProgress"
+    )
+    val avatarColor = Color(peer.avatarColor)
+
+    Box(contentAlignment = Alignment.Center) {
+        repeat(3) { index ->
+            val phase = (waveProgress + index / 3f) % 1f
+            val waveSize = avatarSize + (110.dp * phase)
+            Box(
+                modifier = Modifier
+                    .size(waveSize)
+                    .clip(CircleShape)
+                    .border(
+                        width = 2.dp,
+                        color = avatarColor.copy(alpha = (1f - phase) * 0.55f),
+                        shape = CircleShape
+                    )
+            )
+        }
+
+        PeerAvatarDisplay(
+            peer = peer,
+            size = avatarSize,
+            modifier = Modifier.border(
+                3.dp,
+                avatarColor.copy(alpha = 0.4f),
+                CircleShape
+            )
+        )
+    }
+}
+
 @Composable
 private fun OutgoingCallView(
     activeCall: ActiveCall,
     onCancel: () -> Unit
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "outgoing_pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.25f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "scale"
-    )
-
+    // Responsive layout: the middle block absorbs all spare height (weight) so the
+    // cancel button stays pinned above the gesture bar even with large font scale.
     Column(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(horizontal = 24.dp)
     ) {
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
         ) {
-            Box(
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
-                    .size(140.dp)
-                    .scale(pulseScale)
-                    .clip(CircleShape)
-                    .background(Color(activeCall.peer.avatarColor).copy(alpha = 0.25f)),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 16.dp)
             ) {
-                PeerAvatarDisplay(
-                    peer = activeCall.peer,
-                    size = 110.dp
-                )
-            }
+                RingingWavesAvatar(peer = activeCall.peer, avatarSize = 120.dp)
 
-            Spacer(modifier = Modifier.height(24.dp))
-            Text(
-                text = activeCall.peer.name,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = if (activeCall.isVideo) "جاري الاتصال بالفيديو المباشر..." else "جاري الاتصال الصوتي المباشر...",
-                style = MaterialTheme.typography.bodyLarge,
-                color = Color.White.copy(alpha = 0.8f)
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Surface(
-                color = Color.White.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                Spacer(modifier = Modifier.height(24.dp))
+                Text(
+                    text = activeCall.peer.name,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (activeCall.isVideo) "جاري الاتصال بالفيديو المباشر..." else "جاري الاتصال الصوتي المباشر...",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White.copy(alpha = 0.8f)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    color = Color.White.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(AccentGreen)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "اتصال P2P مباشر • ${activeCall.peer.ip}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = PrimaryCyan
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(AccentGreen)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "اتصال P2P مباشر • ${activeCall.peer.ip}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = PrimaryCyan
+                        )
+                    }
                 }
             }
         }
 
-        FloatingActionButton(
-            onClick = onCancel,
-            containerColor = AccentRose,
-            contentColor = Color.White,
-            shape = CircleShape,
+        // Fixed bottom action area — never pushed off-screen
+        Row(
             modifier = Modifier
-                .size(68.dp)
-                .testTag("end_call_button")
+                .fillMaxWidth()
+                .padding(bottom = 28.dp),
+            horizontalArrangement = Arrangement.Center
         ) {
-            Icon(
-                imageVector = Icons.Default.CallEnd,
-                contentDescription = "Cancel Call",
-                modifier = Modifier.size(32.dp)
-            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FloatingActionButton(
+                    onClick = onCancel,
+                    containerColor = AccentRose,
+                    contentColor = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(68.dp)
+                        .testTag("end_call_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CallEnd,
+                        contentDescription = "Cancel Call",
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "إلغاء",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White.copy(alpha = 0.85f)
+                )
+            }
         }
     }
 }
 
+/**
+ * RULE 4.2: fullscreen immersive incoming call screen — deep dark backdrop, radial
+ * radar waves around the caller avatar, generously spaced oversized answer buttons.
+ */
 @Composable
 private fun IncomingCallView(
     activeCall: ActiveCall,
     onAccept: () -> Unit,
     onDecline: () -> Unit
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "incoming_pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 0.95f,
-        targetValue = 1.2f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "scale"
-    )
-
+    // Responsive layout: weight()-based middle area guarantees the Accept/Decline
+    // buttons remain fully visible and centered above the gesture bar regardless
+    // of font scale (large system fonts) or screen size.
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF0F0B22),
+                        DarkBackground,
+                        Color(0xFF12061C)
+                    )
+                )
+            )
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(horizontal = 24.dp)
     ) {
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
         ) {
-            Box(
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
-                    .size(140.dp)
-                    .scale(pulseScale)
-                    .clip(CircleShape)
-                    .background(Color(activeCall.peer.avatarColor).copy(alpha = 0.25f)),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 16.dp)
             ) {
-                PeerAvatarDisplay(
-                    peer = activeCall.peer,
-                    size = 110.dp
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-            Text(
-                text = activeCall.peer.name,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = if (activeCall.isVideo) "مكالمة فيديو واردة" else "مكالمة صوتية واردة",
-                style = MaterialTheme.typography.bodyLarge,
-                color = Color.White.copy(alpha = 0.85f)
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Surface(
-                color = Color.White.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                Surface(
+                    color = AccentGreen.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(20.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(AccentGreen)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "اتصال P2P مباشر • ${activeCall.peer.ip}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = PrimaryCyan
+                        text = if (activeCall.isVideo) "مكالمة فيديو واردة" else "مكالمة صوتية واردة",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = AccentGreen,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
+                }
+
+                Spacer(modifier = Modifier.height(32.dp))
+                RingingWavesAvatar(peer = activeCall.peer, avatarSize = 120.dp)
+
+                Spacer(modifier = Modifier.height(24.dp))
+                Text(
+                    text = activeCall.peer.name,
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Surface(
+                    color = Color.White.copy(alpha = 0.1f),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(AccentGreen)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "اتصال P2P مباشر • ${activeCall.peer.ip}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = PrimaryCyan
+                        )
+                    }
                 }
             }
         }
 
+        // Fixed bottom answer area — generous spacing, large touch targets
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .padding(bottom = 28.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Decline (Red)
-            FloatingActionButton(
-                onClick = onDecline,
-                containerColor = AccentRose,
-                contentColor = Color.White,
-                shape = CircleShape,
-                modifier = Modifier
-                    .size(68.dp)
-                    .testTag("decline_call_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.CallEnd,
-                    contentDescription = "Decline",
-                    modifier = Modifier.size(32.dp)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FloatingActionButton(
+                    onClick = onDecline,
+                    containerColor = AccentRose,
+                    contentColor = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(74.dp)
+                        .testTag("decline_call_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CallEnd,
+                        contentDescription = "Decline",
+                        modifier = Modifier.size(34.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "رفض",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White.copy(alpha = 0.85f)
                 )
             }
 
-            // Accept (Green)
-            FloatingActionButton(
-                onClick = onAccept,
-                containerColor = AccentGreen,
-                contentColor = Color.White,
-                shape = CircleShape,
-                modifier = Modifier
-                    .size(68.dp)
-                    .testTag("accept_call_button")
-            ) {
-                Icon(
-                    imageVector = if (activeCall.isVideo) Icons.Default.Videocam else Icons.Default.Call,
-                    contentDescription = "Accept",
-                    modifier = Modifier.size(32.dp)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FloatingActionButton(
+                    onClick = onAccept,
+                    containerColor = AccentGreen,
+                    contentColor = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(74.dp)
+                        .testTag("accept_call_button")
+                ) {
+                    Icon(
+                        imageVector = if (activeCall.isVideo) Icons.Default.Videocam else Icons.Default.Call,
+                        contentDescription = "Accept",
+                        modifier = Modifier.size(34.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "قبول",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White.copy(alpha = 0.85f)
                 )
             }
         }
@@ -515,22 +598,25 @@ private fun ConnectedCallView(
     isMuted: Boolean,
     isSpeakerOn: Boolean,
     callVolume: Float,
+    signalInfo: PeerSignalInfo?,
     onEnd: () -> Unit,
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit,
     onToggleCameraLens: () -> Unit,
     onToggleCameraOff: () -> Unit,
-    onOpenVolumeDialog: () -> Unit,
-    onOpenScreenSharePicker: () -> Unit,
+    onSetVolume: (Float) -> Unit,
+    onStartScreenShare: (String) -> Unit,
     onStopScreenShare: () -> Unit,
-    onMinimize: () -> Unit
+    onMinimize: () -> Unit,
+    onOpenMoreOptions: () -> Unit,
+    onSendReaction: (String) -> Unit
 ) {
     val isCameraOff = activeCall.isCameraOff
     val isRemoteCameraOff = activeCall.isRemoteCameraOff
     val isRemoteMuted = activeCall.isRemoteMuted
     val isScreenSharing = activeCall.isScreenSharing
-    val isLocalScreenSharing = activeCall.isScreenSharing // local or remote state tracking
     val localScreenShareBitmap by videoEngine.localScreenShareBitmap.collectAsState()
+    val remoteFrame = remoteVideoFrames[activeCall.peer.id]
 
     Column(
         modifier = Modifier
@@ -543,9 +629,11 @@ private fun ConnectedCallView(
                 .fillMaxWidth()
                 .weight(1f)
         ) {
-            if (activeCall.isVideo && !isRemoteCameraOff) {
-                // Video Mode or Remote Screen Share Mode
-                val remoteFrame = remoteVideoFrames[activeCall.peer.id]
+            // Video area shows for video calls AND for audio-only calls whose peer
+            // is broadcasting their screen.
+            val showVideoArea = (activeCall.isVideo && !isRemoteCameraOff) ||
+                    remoteFrame?.isScreenShare == true
+            if (showVideoArea) {
                 RemotePeerVideoView(
                     bitmap = remoteFrame?.bitmap,
                     peerName = activeCall.peer.name,
@@ -558,16 +646,15 @@ private fun ConnectedCallView(
                         color = PrimaryPurple.copy(alpha = 0.85f),
                         shape = RoundedCornerShape(20.dp),
                         modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .statusBarsPadding()
-                            .padding(top = 16.dp)
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 16.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.ScreenShare,
+                                imageVector = Icons.Default.PresentToAll,
                                 contentDescription = null,
                                 tint = Color.White,
                                 modifier = Modifier.size(16.dp)
@@ -583,22 +670,23 @@ private fun ConnectedCallView(
                     }
                 }
 
-                // Local Camera / Screen Share Preview
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    border = androidx.compose.foundation.BorderStroke(
-                        2.dp,
-                        if (localScreenShareBitmap != null) PrimaryPurple else if (isCameraOff) AccentRose else PrimaryCyan
-                    ),
-                    color = Color.Black.copy(alpha = 0.8f),
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .statusBarsPadding()
-                        .padding(top = 64.dp, end = 16.dp)
-                        .size(width = 110.dp, height = 160.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                ) {
-                    if (localScreenShareBitmap != null && !localScreenShareBitmap!!.isRecycled) {
+                // Local Camera / Screen Share Preview (hidden in pure audio calls)
+                if (localScreenShareBitmap != null || activeCall.isVideo) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            2.dp,
+                            if (localScreenShareBitmap != null) PrimaryPurple else if (isCameraOff) AccentRose else PrimaryCyan
+                        ),
+                        color = Color.Black.copy(alpha = 0.8f),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .statusBarsPadding()
+                            .padding(top = 64.dp, end = 16.dp)
+                            .size(width = 110.dp, height = 160.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                    ) {
+                        if (localScreenShareBitmap != null && !localScreenShareBitmap!!.isRecycled) {
                         // Live local screen broadcast preview
                         Box(modifier = Modifier.fillMaxSize()) {
                             Image(
@@ -648,6 +736,7 @@ private fun ConnectedCallView(
                             videoEngine = videoEngine,
                             modifier = Modifier.fillMaxSize()
                         )
+                    }
                     }
                 }
             } else {
@@ -726,70 +815,18 @@ private fun ConnectedCallView(
                 }
             }
 
-            // Top Status Bar: Status Pill + Minimize (PiP) button
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    color = Color.Black.copy(alpha = 0.65f),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(AccentGreen)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "${activeCall.peer.name} • $durationText",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White
-                        )
-
-                        if (isRemoteMuted) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Icon(
-                                imageVector = Icons.Default.MicOff,
-                                contentDescription = "Remote Muted",
-                                tint = AccentRose,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                }
-
-                // Minimize to Floating PiP button
-                IconButton(
-                    onClick = onMinimize,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.65f))
-                        .testTag("minimize_call_to_pip")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CloseFullscreen,
-                        contentDescription = "تصغير المكالمة",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
+            // Tier 1 Top App Bar: encryption badge + signal quality + minimize (PiP)
+            CallTopBar(
+                peerName = activeCall.peer.name,
+                durationText = durationText,
+                signalInfo = signalInfo,
+                isRemoteMuted = isRemoteMuted,
+                onMinimize = onMinimize,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
         }
 
-        // Action & Control Dock at bottom with clear buttons
+        // Tier 2 Bottom Control Dock: quick reactions + exactly 4 controls + End Call
         Surface(
             color = Color.Black.copy(alpha = 0.95f),
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
@@ -798,115 +835,242 @@ private fun ConnectedCallView(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 16.dp)
+                    .padding(vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Main Action Buttons Row
+                // Quick floating emoji reactions strip
+                CallEmojiPickerRow(
+                    onSendReaction = onSendReaction,
+                    modifier = Modifier.padding(horizontal = 18.dp)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Mute Microphone Toggle
+                // 1. Mic Toggle
+                CallDockButton(
+                    icon = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                    label = if (isMuted) "مكتوم" else "المايك",
+                    isActive = isMuted,
+                    activeColor = AccentRose,
+                    onClick = onToggleMute,
+                    testTag = "call_mute_mic_button"
+                )
+
+                // 2. Camera Toggle (video calls only)
+                if (activeCall.isVideo) {
                     CallDockButton(
-                        icon = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                        label = if (isMuted) "مكتوم" else "كتم المايك",
-                        isActive = isMuted,
+                        icon = if (isCameraOff) Icons.Default.VideocamOff else Icons.Default.Videocam,
+                        label = if (isCameraOff) "تشغيل" else "فيديو",
+                        isActive = isCameraOff,
                         activeColor = AccentRose,
-                        onClick = onToggleMute,
-                        testTag = "call_mute_mic_button"
+                        onClick = onToggleCameraOff,
+                        testTag = "call_toggle_camera_off_button"
                     )
+                }
 
-                    // Loudspeaker Toggle
-                    CallDockButton(
-                        icon = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
-                        label = if (isSpeakerOn) "مكبر الصوت" else "سماعة الأذن",
-                        isActive = isSpeakerOn,
-                        activeColor = PrimaryCyan,
-                        onClick = onToggleSpeaker,
-                        testTag = "call_speaker_button"
+                // 3. Speaker Toggle
+                CallDockButton(
+                    icon = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.GraphicEq,
+                    label = if (isSpeakerOn) "مكبر" else "أذن",
+                    isActive = isSpeakerOn,
+                    activeColor = PrimaryCyan,
+                    onClick = onToggleSpeaker,
+                    testTag = "call_speaker_button"
+                )
+
+                // 4. More Options
+                CallDockButton(
+                    icon = Icons.Default.MoreVert,
+                    label = "المزيد",
+                    isActive = false,
+                    activeColor = PrimaryPurple,
+                    onClick = onOpenMoreOptions,
+                    testTag = "call_more_options_button"
+                )
+
+                // 5. End Call (vibrant red)
+                FloatingActionButton(
+                    onClick = onEnd,
+                    containerColor = AccentRose,
+                    contentColor = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .testTag("call_end_active_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CallEnd,
+                        contentDescription = "End Call",
+                        modifier = Modifier.size(26.dp)
                     )
-
-                    // Volume Tuning Slider Opener
-                    CallDockButton(
-                        icon = Icons.Default.GraphicEq,
-                        label = "مستوى الصوت (${(callVolume * 100).toInt()}%)",
-                        isActive = callVolume < 0.95f || callVolume > 1.05f,
-                        activeColor = PrimaryPurple,
-                        onClick = onOpenVolumeDialog,
-                        testTag = "call_volume_button"
-                    )
-
-                    // Video Camera Controls (if in video mode)
-                    if (activeCall.isVideo) {
-                        // Toggle Camera On/Off (Mute Video)
-                        CallDockButton(
-                            icon = if (isCameraOff) Icons.Default.VideocamOff else Icons.Default.Videocam,
-                            label = if (isCameraOff) "تشغيل الفيديو" else "كتم الفيديو",
-                            isActive = isCameraOff,
-                            activeColor = AccentRose,
-                            onClick = onToggleCameraOff,
-                            testTag = "call_toggle_camera_off_button"
-                        )
-
-                        // Switch Camera Lens (Front/Back)
-                        if (!isCameraOff) {
-                            CallDockButton(
-                                icon = Icons.Default.Cameraswitch,
-                                label = "تبديل العدسة",
-                                isActive = false,
-                                activeColor = PrimaryCyan,
-                                onClick = onToggleCameraLens,
-                                testTag = "call_switch_lens_button"
-                            )
-                        }
-                    }
-
-                    // Screen Share Button
-                    if (isScreenSharing) {
-                        CallDockButton(
-                            icon = Icons.Default.StopScreenShare,
-                            label = "إيقاف المشاركة",
-                            isActive = true,
-                            activeColor = AccentRose,
-                            onClick = onStopScreenShare,
-                            testTag = "call_stop_screen_share_button"
-                        )
-                    } else {
-                        CallDockButton(
-                            icon = Icons.Default.PresentToAll,
-                            label = "مشاركة الشاشة",
-                            isActive = false,
-                            activeColor = PrimaryPurple,
-                            onClick = onOpenScreenSharePicker,
-                            testTag = "call_start_screen_share_button"
-                        )
-                    }
-
-                    // End Call Button
-                    FloatingActionButton(
-                        onClick = onEnd,
-                        containerColor = AccentRose,
-                        contentColor = Color.White,
-                        shape = CircleShape,
-                        modifier = Modifier
-                            .size(54.dp)
-                            .testTag("call_end_active_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CallEnd,
-                            contentDescription = "End Call",
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
+                }
                 }
             }
         }
     }
 }
 
+/** Tier 1: glass top bar with encryption badge, timer, signal quality and PiP. */
+@Composable
+private fun CallTopBar(
+    peerName: String,
+    durationText: String,
+    signalInfo: PeerSignalInfo?,
+    isRemoteMuted: Boolean,
+    onMinimize: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.weight(1f, fill = false)
+        ) {
+            // End-to-end encryption badge
+            Surface(
+                color = StatusGreen.copy(alpha = 0.2f),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Icon(
+                        imageVector = AppIcons.ShieldEncryption,
+                        contentDescription = "تشفير تام",
+                        tint = StatusGreen,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "مشفّر",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = StatusGreen
+                    )
+                }
+            }
+
+            // Peer + duration pill
+            Surface(
+                color = Color.Black.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = peerName,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                        maxLines = 1
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = durationText,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = PrimaryCyan
+                    )
+                    if (isRemoteMuted) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.MicOff,
+                            contentDescription = "Remote Muted",
+                            tint = AccentRose,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (signalInfo != null) {
+                SignalQualityPill(signalInfo = signalInfo)
+            }
+
+            // Minimize to Floating PiP button
+            IconButton(
+                onClick = onMinimize,
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.65f))
+                    .testTag("minimize_call_to_pip")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CloseFullscreen,
+                    contentDescription = "تصغير المكالمة",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+/** Compact live signal quality indicator (bars + latency). */
+@Composable
+private fun SignalQualityPill(signalInfo: PeerSignalInfo) {
+    val qualityColor = when (signalInfo.quality) {
+        ConnectionQualityLevel.EXCELLENT -> StatusGreen
+        ConnectionQualityLevel.GOOD -> AccentGreen
+        ConnectionQualityLevel.FAIR -> Color(0xFFF59E0B)
+        ConnectionQualityLevel.POOR, ConnectionQualityLevel.DISCONNECTED -> AccentRose
+    }
+
+    Surface(
+        color = Color.Black.copy(alpha = 0.65f),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            repeat(4) { bar ->
+                val isActiveBar = bar < signalInfo.bars
+                Box(
+                    modifier = Modifier
+                        .padding(end = 2.dp)
+                        .size(width = 4.dp, height = (4 + bar * 3).dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(
+                            if (isActiveBar) qualityColor else Color.White.copy(alpha = 0.25f)
+                        )
+                )
+            }
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+                text = "${signalInfo.latencyMs}ms",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.9f)
+            )
+        }
+    }
+}
+
 @Composable
 private fun CallDockButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     label: String,
     isActive: Boolean,
     activeColor: Color,
@@ -915,12 +1079,12 @@ private fun CallDockButton(
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.padding(horizontal = 3.dp)
+        modifier = Modifier.padding(horizontal = 2.dp)
     ) {
         IconButton(
             onClick = onClick,
             modifier = Modifier
-                .size(48.dp)
+                .size(52.dp)
                 .clip(CircleShape)
                 .background(if (isActive) activeColor.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.15f))
                 .testTag(testTag)
@@ -929,7 +1093,7 @@ private fun CallDockButton(
                 imageVector = icon,
                 contentDescription = label,
                 tint = if (isActive) activeColor else Color.White,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(23.dp)
             )
         }
         Spacer(modifier = Modifier.height(3.dp))
@@ -943,235 +1107,196 @@ private fun CallDockButton(
     }
 }
 
+/** Tier 3: "More Options" modal bottom sheet for advanced call tools. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CallVolumeDialog(
-    currentVolume: Float,
-    onVolumeChanged: (Float) -> Unit,
-    onDismiss: () -> Unit
+private fun CallMoreOptionsSheet(
+    isVideoCall: Boolean,
+    isCameraOff: Boolean,
+    isScreenSharing: Boolean,
+    callVolume: Float,
+    signalInfo: PeerSignalInfo?,
+    onDismiss: () -> Unit,
+    onSetVolume: (Float) -> Unit,
+    onToggleScreenShare: () -> Unit,
+    onSwitchCameraLens: () -> Unit
 ) {
-    var volume by remember { mutableFloatStateOf(currentVolume) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var volume by remember(callVolume) { mutableFloatStateOf(callVolume) }
 
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.VolumeUp,
-                    contentDescription = null,
-                    tint = PrimaryPurple
-                )
-                Text("التحكم بمستوى صوت المكالمة", fontWeight = FontWeight.Bold)
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text(
-                    text = "${(volume * 100).toInt()}%",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = PrimaryPurple
-                )
+        sheetState = sheetState,
+        containerColor = Color(0xFF161230),
+        contentColor = Color.White
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "خيارات المكالمة المتقدمة",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
 
+            // Screen share toggle
+            MoreOptionRow(
+                icon = if (isScreenSharing) Icons.Default.StopScreenShare else Icons.Default.PresentToAll,
+                title = if (isScreenSharing) "إيقاف مشاركة الشاشة" else "مشاركة الشاشة",
+                subtitle = if (isScreenSharing) "البث الحي يعمل الآن" else "بث شاشة هاتفك مباشرة للطرف الآخر",
+                tint = if (isScreenSharing) AccentRose else PrimaryPurple,
+                onClick = onToggleScreenShare,
+                testTag = "more_screen_share_option"
+            )
+
+            // Switch camera lens
+            if (isVideoCall && !isCameraOff) {
+                MoreOptionRow(
+                    icon = Icons.Default.Cameraswitch,
+                    title = "تبديل الكاميرا الأمامية/الخلفية",
+                    subtitle = "الانتقال بين العدستين أثناء المكالمة",
+                    tint = PrimaryCyan,
+                    onClick = onSwitchCameraLens,
+                    testTag = "more_switch_lens_option"
+                )
+            }
+
+            // Call volume slider
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.VolumeDown,
-                        contentDescription = "Low",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(18.dp)
                     )
-
-                    Slider(
-                        value = volume,
-                        onValueChange = {
-                            volume = it
-                            onVolumeChanged(it)
-                        },
-                        valueRange = 0f..1.5f,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("call_volume_slider"),
-                        colors = SliderDefaults.colors(
-                            thumbColor = PrimaryPurple,
-                            activeTrackColor = PrimaryPurple
-                        )
+                    Text(
+                        text = "مستوى صوت المكالمة (${(volume * 100).toInt()}%)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White
                     )
-
+                    Spacer(modifier = Modifier.weight(1f))
                     Icon(
                         imageVector = Icons.Default.VolumeUp,
-                        contentDescription = "High",
-                        tint = PrimaryPurple
+                        contentDescription = null,
+                        tint = PrimaryPurple,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
-
-                Text(
-                    text = "يمكن رفع الصوت حتى 150% لتوضيح المحادثة في البيئات الصاخبة.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
+                Slider(
+                    value = volume,
+                    onValueChange = {
+                        volume = it
+                        onSetVolume(it)
+                    },
+                    valueRange = 0f..1.5f,
+                    modifier = Modifier.testTag("call_volume_slider"),
+                    colors = SliderDefaults.colors(
+                        thumbColor = PrimaryPurple,
+                        activeTrackColor = PrimaryPurple
+                    )
                 )
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("تم", fontWeight = FontWeight.Bold)
-            }
-        }
-    )
-}
 
-data class ShareableAppOption(
-    val name: String,
-    val description: String,
-    val iconColor: Long
-)
-
-@Composable
-fun ScreenShareAppPickerDialog(
-    onAppSelected: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val apps = remember {
-        listOf(
-            ShareableAppOption("شاشة الهاتف بالكامل", "بث الشاشة وتصفح التطبيقات مباشرة", 0xFF0EA5E9),
-            ShareableAppOption("لوحة الرسم والملاحظات", "مشاركة مستند تفاعلي ومخططات حية", 0xFF8B5CF6),
-            ShareableAppOption("عارض الصور والملفات", "استعراض الصور والمستندات المشتركة", 0xFF10B981),
-            ShareableAppOption("متصفح الويب المحلي", "مشاركة نتائج البحث والمواقع", 0xFFF59E0B)
-        )
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.ScreenShare,
-                    contentDescription = null,
-                    tint = PrimaryPurple
-                )
-                Text("اختر ما تريد مشاركته", fontWeight = FontWeight.Bold)
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    text = "سيتم إرسال بث الشاشة والتطبيق المحدد مباشرة وبأعلى دقة للطرف الآخر في المكالمة:",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+            // Live Network Diagnostics HUD
+            if (signalInfo != null) {
+                Surface(
+                    color = Color.White.copy(alpha = 0.06f),
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    items(apps) { app ->
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                            ),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onAppSelected(app.name) }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(app.iconColor)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PresentToAll,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = app.name,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = app.description,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        DiagnosticStat("الكمون", "${signalInfo.latencyMs}ms")
+                        DiagnosticStat("الاهتزاز", "${signalInfo.jitterMs}ms")
+                        DiagnosticStat("البيانات", "${signalInfo.bitrateKbps}kbps")
+                        DiagnosticStat("الجودة", signalInfo.quality.labelAr)
                     }
                 }
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("إلغاء")
-            }
-        },
-        confirmButton = {}
-    )
+        }
+    }
 }
 
-private fun generateScreenShareFrame(appName: String, timestamp: Long): Bitmap {
-    val width = 480
-    val height = 640
-    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    val canvas = android.graphics.Canvas(bmp)
-    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+@Composable
+private fun MoreOptionRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    tint: Color,
+    onClick: () -> Unit,
+    testTag: String = ""
+) {
+    Surface(
+        color = Color.White.copy(alpha = 0.06f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(14.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(tint.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = tint,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.65f)
+                )
+            }
+        }
+    }
+}
 
-    // Background
-    paint.color = 0xFF1E293B.toInt()
-    canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
-
-    // Header bar
-    paint.color = 0xFF8B5CF6.toInt()
-    canvas.drawRect(0f, 0f, width.toFloat(), 60f, paint)
-
-    // App title
-    paint.color = 0xFFFFFFFF.toInt()
-    paint.textSize = 24f
-    paint.isFakeBoldText = true
-    canvas.drawText("مشاركة: $appName", 24f, 40f, paint)
-
-    // Content cards
-    paint.color = 0xFF334155.toInt()
-    paint.isFakeBoldText = false
-    canvas.drawRoundRect(20f, 80f, width - 20f, 220f, 16f, 16f, paint)
-    canvas.drawRoundRect(20f, 240f, width - 20f, 380f, 16f, 16f, paint)
-    canvas.drawRoundRect(20f, 400f, width - 20f, 540f, 16f, 16f, paint)
-
-    // Text inside cards
-    paint.color = 0xFF38BDF8.toInt()
-    paint.textSize = 18f
-    canvas.drawText("بث تفاعلي حي عبر LocalConnect P2P", 36f, 120f, paint)
-    paint.color = 0xFFCBD5E1.toInt()
-    paint.textSize = 14f
-    canvas.drawText("معدل التحديث: 30 إطار في الثانية • دقة HD", 36f, 150f, paint)
-    canvas.drawText("الوقت: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(timestamp))}", 36f, 180f, paint)
-
-    return bmp
+@Composable
+private fun DiagnosticStat(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = PrimaryCyan
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = 0.6f)
+        )
+    }
 }

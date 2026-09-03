@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -94,6 +95,7 @@ fun AuthScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
             .background(MaterialTheme.colorScheme.background)
             .padding(16.dp),
         contentAlignment = Alignment.Center
@@ -228,11 +230,12 @@ fun AuthScreen(
                 OutlinedTextField(
                     value = username,
                     onValueChange = {
-                        username = it.replace(" ", "")
+                        username = it.replace(Regex("[^a-zA-Z0-9_\\u0600-\\u06FF ]"), "").take(30).replace(" ", "")
                         onClearError()
                     },
                     label = { Text("اسم المستخدم الفريد (Username)") },
-                    placeholder = { Text("مثال: ahmed_99") },
+                    placeholder = { Text("مثال: ahmed_99 أو أحمد") },
+                    supportingText = { Text("يدعم العربية والإنجليزية — بدون مسافات") },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.Person,
@@ -246,7 +249,9 @@ fun AuthScreen(
                         .fillMaxWidth()
                         .testTag("auth_username_input"),
                     keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Ascii,
+                        // Full text keyboard: Arabic usernames are allowed; validation
+                        // (length + no spaces) happens programmatically, not via the keyboard.
+                        keyboardType = KeyboardType.Text,
                         imeAction = ImeAction.Next
                     )
                 )

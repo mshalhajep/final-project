@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Send
@@ -65,16 +66,20 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,13 +101,20 @@ import com.example.model.RoomInfo
 import com.example.model.TypingPeer
 import com.example.model.UserProfile
 import com.example.network.VideoEngine
+import com.example.ui.components.ChatListItem
 import com.example.ui.components.ChatMessageBubble
+import com.example.ui.components.DateHeaderChip
+import com.example.ui.components.buildChatListItems
 import com.example.ui.components.ChatTypingIndicator
+import com.example.ui.components.ImageViewerDialog
 import com.example.ui.theme.AccentRose
 import com.example.ui.theme.PrimaryPurple
 import com.example.ui.theme.PrimaryPurpleDark
 import com.example.ui.theme.SecondarySlate
 import com.example.ui.theme.StatusGreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -133,6 +145,8 @@ fun RoomsScreen(
     playingVoiceMessageId: String? = null,
     voiceNoteProgress: Float = 0f,
     voiceNoteCurrentMs: Int = 0,
+    playbackSpeed: Float = 1f,
+    onCyclePlaybackSpeed: () -> Unit = {},
     onUserTyping: (Boolean) -> Unit = {},
     onStartVoiceRecording: () -> Unit = {},
     onStopAndSendVoiceNote: () -> Unit = {},
@@ -153,6 +167,7 @@ fun RoomsScreen(
     onSendInRoomMessage: (String, Bitmap?) -> Unit,
     onSendInRoomFile: (Uri, String) -> Unit = { _, _ -> },
     onDownloadFile: (ChatMessage) -> Unit = {},
+    onCancelDownloadFile: (ChatMessage) -> Unit = {},
     onOpenFile: (ChatMessage) -> Unit = {},
     onDirectCallPeer: (Peer, Boolean) -> Unit = { _, _ -> },
     onClearRoomJoinError: () -> Unit,
@@ -162,6 +177,11 @@ fun RoomsScreen(
 ) {
     val currentRoomInfo = rooms.find { it.id == currentRoomId } ?: rooms.firstOrNull()
     val roomPeers = peers.filter { it.currentRoom == currentRoomId }
+
+    // Stop the live typing indicator the moment this room chat leaves composition
+    DisposableEffect(Unit) {
+        onDispose { onUserTyping(false) }
+    }
     val totalInRoom = roomPeers.size + 1 // +1 for self
     val maxCapacity = currentRoomInfo?.maxCapacity ?: 10
 
@@ -169,6 +189,7 @@ fun RoomsScreen(
     var messageText by remember { mutableStateOf("") }
     var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var forwardingMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var viewingImage by remember { mutableStateOf<ChatMessage?>(null) }
     var selectedImageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
@@ -180,18 +201,19 @@ fun RoomsScreen(
     }
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            try {
-                val inputStream = context.contentResolver.openInputStream(uri)
-                val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
-                selectedImageBitmap = bitmap
-                selectedFileUri = null
-                selectedFileName = null
-            } catch (e: Exception) {
-                e.printStackTrace()
+            // Sub-sampled decode (max 1280px) — raw 4K decodes allocate 50MB+ and OOM
+            scope.launch(Dispatchers.IO) {
+                val bmp = com.example.utils.StorageUtils.decodeSampledBitmap(context, uri)
+                withContext(Dispatchers.Main) {
+                    selectedImageBitmap = bmp
+                    selectedFileUri = null
+                    selectedFileName = null
+                }
             }
         }
     }
@@ -221,12 +243,22 @@ fun RoomsScreen(
     }
 
     val listState = rememberLazyListState()
+    val scrollScope = rememberCoroutineScope()
+    val isNearBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()
+            lastVisible == null || info.totalItemsCount == 0 ||
+                    lastVisible.index >= info.totalItemsCount - 2
+        }
+    }
     val isImeVisible = WindowInsets.isImeVisible
+    val roomChatItems = remember(inRoomMessages) { buildChatListItems(inRoomMessages) }
 
     // Auto-scroll chat to bottom on new messages or keyboard open
-    LaunchedEffect(inRoomMessages.size, isImeVisible) {
-        if (inRoomMessages.isNotEmpty()) {
-            listState.animateScrollToItem(inRoomMessages.size - 1)
+    LaunchedEffect(roomChatItems.size, isImeVisible) {
+        if (roomChatItems.isNotEmpty()) {
+            listState.animateScrollToItem(roomChatItems.size - 1)
         }
     }
 
@@ -246,7 +278,7 @@ fun RoomsScreen(
 
         // Room Error Banner
         AnimatedVisibility(visible = roomJoinError != null) {
-            if (roomJoinError != null) {
+            roomJoinError?.let { error ->
                 Card(
                     shape = RoundedCornerShape(14.dp),
                     colors = CardDefaults.cardColors(containerColor = AccentRose.copy(alpha = 0.15f)),
@@ -260,7 +292,7 @@ fun RoomsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = roomJoinError,
+                            text = error,
                             color = AccentRose,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold
@@ -622,7 +654,7 @@ fun RoomsScreen(
                                                         fontWeight = FontWeight.Bold
                                                     )
                                                     Text(
-                                                        text = peer.ip,
+                                                        text = peer.ip.substringBeforeLast(".") + ".***",
                                                         style = MaterialTheme.typography.labelSmall,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
@@ -714,38 +746,73 @@ fun RoomsScreen(
                         }
                     }
                 } else {
-                    LazyColumn(
-                        state = listState,
+                    val chatListItems = remember(inRoomMessages) { buildChatListItems(inRoomMessages) }
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)
+                            .weight(1f)
                     ) {
-                        items(inRoomMessages, key = { it.id }) { message ->
-                            ChatMessageBubble(
-                                message = message,
-                                downloadProgress = downloadProgressMap[message.id] ?: 0f,
-                                isDownloading = downloadingIds.contains(message.id),
-                                onDownloadClick = onDownloadFile,
-                                onOpenFileClick = onOpenFile,
-                                isPlayingVoiceNote = isPlayingVoiceNote,
-                                playingVoiceMessageId = playingVoiceMessageId,
-                                voiceNoteProgress = voiceNoteProgress,
-                                voiceNoteCurrentMs = voiceNoteCurrentMs,
-                                onTogglePlayVoiceNote = onTogglePlayVoiceNote,
-                                onSeekVoiceNote = onSeekVoiceNote,
-                                onEditClick = { msg ->
-                                    editingMessage = msg
-                                    messageText = msg.content
-                                },
-                                onDeleteClick = { msg ->
-                                    onDeleteMessage(msg.id)
-                                },
-                                onForwardClick = { msg ->
-                                    forwardingMessage = msg
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)
+                        ) {
+                            items(chatListItems, key = { it.key }) { item ->
+                                when (item) {
+                                    is ChatListItem.DateHeader -> DateHeaderChip(item.text)
+                                    is ChatListItem.Message -> ChatMessageBubble(
+                                        message = item.message,
+                                        downloadProgress = downloadProgressMap[item.message.id] ?: 0f,
+                                        isDownloading = downloadingIds.contains(item.message.id),
+                                        onDownloadClick = onDownloadFile,
+                                        onOpenFileClick = onOpenFile,
+                                        isPlayingVoiceNote = isPlayingVoiceNote,
+                                        playingVoiceMessageId = playingVoiceMessageId,
+                                        voiceNoteProgress = voiceNoteProgress,
+                                        voiceNoteCurrentMs = voiceNoteCurrentMs,
+                                        playbackSpeed = playbackSpeed,
+                                        onTogglePlayVoiceNote = onTogglePlayVoiceNote,
+                                        onSeekVoiceNote = onSeekVoiceNote,
+                                        onCyclePlaybackSpeed = onCyclePlaybackSpeed,
+                                        onOpenImage = { msg -> viewingImage = msg },
+                                        onEditClick = { msg ->
+                                            editingMessage = msg
+                                            messageText = msg.content
+                                        },
+                                        onDeleteClick = { msg ->
+                                            onDeleteMessage(msg.id)
+                                        },
+                                        onForwardClick = { msg ->
+                                            forwardingMessage = msg
+                                        },
+                                        onCancelDownloadClick = onCancelDownloadFile
+                                    )
                                 }
-                            )
+                            }
+                        }
+
+                        if (!isNearBottom) {
+                            FloatingActionButton(
+                                onClick = {
+                                    scrollScope.launch {
+                                        if (chatListItems.isNotEmpty()) {
+                                            listState.animateScrollToItem(chatListItems.size - 1)
+                                        }
+                                    }
+                                },
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(12.dp)
+                                    .testTag("room_scroll_to_bottom_fab")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "الانتقال لآخر الرسائل"
+                                )
+                            }
                         }
                     }
                 }
@@ -1118,6 +1185,19 @@ fun RoomsScreen(
         }
     }
 }
+
+    // Fullscreen in-app image viewer with pinch zoom
+    viewingImage?.let { imageMessage ->
+        ImageViewerDialog(
+            message = imageMessage,
+            onDismiss = { viewingImage = null },
+            onDownloadClick = {
+                viewingImage = null
+                onDownloadFile(imageMessage)
+            },
+            onOpenFile = { onOpenFile(imageMessage) }
+        )
+    }
 
     // Forward Message Dialog
     if (forwardingMessage != null) {

@@ -116,12 +116,18 @@ fun FloatingCallPipOverlay(
     val isScreenSharing = activeCall?.isScreenSharing == true || activeGroupCall?.isScreenSharing == true
     val isLocalCameraOff = activeCall?.isCameraOff == true || activeGroupCall?.isCameraOff == true
 
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+    val pipWidthPx = with(density) { 175.dp.toPx() }
+    val pipHeightPx = with(density) { 240.dp.toPx() }
+
     Box(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
-                // Transparent touch barrier only around the floating box
-            }
+        // NOTE: no pointerInput on the root — it would swallow all touches and block
+        // every control underneath the floating overlay window.
     ) {
         Surface(
             shape = RoundedCornerShape(20.dp),
@@ -137,11 +143,11 @@ fun FloatingCallPipOverlay(
                 .size(width = 175.dp, height = 240.dp)
                 .shadow(16.dp, RoundedCornerShape(20.dp))
                 .clip(RoundedCornerShape(20.dp))
-                .pointerInput(Unit) {
+                .pointerInput(screenWidthPx, screenHeightPx) {
                     detectDragGestures { change, dragAmount ->
                         change.consume()
-                        offsetX += dragAmount.x
-                        offsetY += dragAmount.y
+                        offsetX = (offsetX + dragAmount.x).coerceIn(0f, (screenWidthPx - pipWidthPx).coerceAtLeast(0f))
+                        offsetY = (offsetY + dragAmount.y).coerceIn(0f, (screenHeightPx - pipHeightPx).coerceAtLeast(0f))
                     }
                 }
                 .testTag("floating_call_pip_overlay")
@@ -232,11 +238,26 @@ fun FloatingCallPipOverlay(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.weight(1f)
                     ) {
+                        // Live-audio dot: pulses with the speaking level like WhatsApp
+                        val isSpeaking = micLevel > 0.05f && !isMuted
+                        val pulseTransition = rememberInfiniteTransition(label = "pip_live_pulse")
+                        val pulseScale by pulseTransition.animateFloat(
+                            initialValue = 0.75f,
+                            targetValue = 1.25f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(650, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "pipPulseScale"
+                        )
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
+                                .scale(if (isSpeaking) pulseScale else 1f)
                                 .clip(CircleShape)
-                                .background(StatusGreen)
+                                .background(
+                                    if (isSpeaking) StatusGreen else Color.White.copy(alpha = 0.35f)
+                                )
                         )
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(

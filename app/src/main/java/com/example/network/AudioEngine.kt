@@ -2,6 +2,7 @@ package com.example.network
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioDeviceInfo
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -10,8 +11,12 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
+import android.Manifest
+import android.content.pm.PackageManager
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,6 +28,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
 class AudioEngine(private val context: Context) {
@@ -35,7 +41,15 @@ class AudioEngine(private val context: Context) {
         const val CHANNEL_OUT = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val FRAME_SIZE = 640 // 20ms at 16kHz 16-bit mono = 320 samples = 640 bytes
-        const val HEADER_SIZE = 40 // senderId (32 bytes max) + roomId (8 bytes max)
+
+        // Packet header: senderId (32) + sessionKey (8) + flags (1) + reserved (7).
+        // The sessionKey must equal the receiver's activeAuthorizedSessionId or the
+        // packet is silently discarded (zero pre-accept audio leakage).
+        const val HEADER_SENDER_ID_SIZE = 32
+        const val HEADER_SESSION_SIZE = 8
+        const val HEADER_FLAGS_OFFSET = HEADER_SENDER_ID_SIZE + HEADER_SESSION_SIZE
+        const val HEADER_SIZE = 48
+        const val FLAG_ENCRYPTED: Byte = 0x01
     }
 
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -50,6 +64,10 @@ class AudioEngine(private val context: Context) {
 
     private var sendSocket: DatagramSocket? = null
     private var receiveSocket: DatagramSocket? = null
+
+    // RULE 1: audio playback is gated on an explicitly authorized call/room session.
+    // Packets whose session header does not match are silently discarded.
+    private val activeAuthorizedSessionId = AtomicReference<String?>(null)
 
     private val _isRecording = MutableStateFlow(false)
     val isRecording = _isRecording.asStateFlow()
@@ -108,13 +126,43 @@ class AudioEngine(private val context: Context) {
 
     fun setSpeakerOn(speakerOn: Boolean) {
         _isSpeakerOn.value = speakerOn
+        applyCommunicationDeviceRouting()
+    }
+
+    /**
+     * Modern audio routing: on Android 12+ the deprecated isSpeakerphoneOn flag is
+     * replaced by setCommunicationDevice() to switch between earpiece and speaker.
+     */
+    private fun applyCommunicationDeviceRouting() {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         audioManager?.let { am ->
             try {
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
-                am.isSpeakerphoneOn = speakerOn
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val speakerOn = _isSpeakerOn.value
+                    val targetType = if (speakerOn) {
+                        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                    } else {
+                        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+                    }
+                    val device = am.availableCommunicationDevices.firstOrNull { it.type == targetType }
+                    // Some chipsets refuse setCommunicationDevice while a previous
+                    // device is still claimed — clear first, then set.
+                    try {
+                        am.clearCommunicationDevice()
+                    } catch (_: Exception) {
+                    }
+                    if (device != null) {
+                        am.setCommunicationDevice(device)
+                    } else if (!speakerOn) {
+                        am.clearCommunicationDevice()
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = _isSpeakerOn.value
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Error setting speakerphone state", e)
+                Log.e(TAG, "Error setting audio routing", e)
             }
         }
     }
@@ -144,15 +192,39 @@ class AudioEngine(private val context: Context) {
         activeTargetAddresses.clear()
     }
 
+    /**
+     * Authorizes playback of packets belonging to [sessionId] (call id / room voice key).
+     * Any audio packet carrying a different session header is silently discarded.
+     */
+    fun authorizeSession(sessionId: String) {
+        activeAuthorizedSessionId.set(sessionId.take(HEADER_SESSION_SIZE))
+        startAudioPlayback()
+    }
+
+    /** Revokes the authorized session — every incoming audio packet is discarded again. */
+    fun revokeSession() {
+        activeAuthorizedSessionId.set(null)
+    }
+
+    fun getAuthorizedSession(): String? = activeAuthorizedSessionId.get()
+
     private fun configureAudioMode(active: Boolean) {
         try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             if (active) {
                 audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
-                audioManager?.isSpeakerphoneOn = _isSpeakerOn.value
+                applyCommunicationDeviceRouting()
             } else {
                 audioManager?.mode = AudioManager.MODE_NORMAL
-                audioManager?.isSpeakerphoneOn = false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    try {
+                        audioManager?.clearCommunicationDevice()
+                    } catch (_: Exception) {
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager?.isSpeakerphoneOn = false
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to configure audio manager mode", e)
@@ -161,6 +233,9 @@ class AudioEngine(private val context: Context) {
 
     /**
      * Start playing received audio from UDP socket.
+     * RULE 1: the loop strictly discards any packet whose session header does not
+     * match activeAuthorizedSessionId — no audio can play before a call is accepted
+     * or a room voice session is explicitly joined.
      */
     fun startAudioPlayback() {
         if (playbackJob?.isActive == true) return
@@ -203,16 +278,41 @@ class AudioEngine(private val context: Context) {
                     receiveBufferSize = 256 * 1024
                 }
 
-                val packetBuffer = ByteArray(FRAME_SIZE + HEADER_SIZE + 128)
+                val packetBuffer = ByteArray(HEADER_SIZE + FRAME_SIZE + 512)
                 val datagramPacket = DatagramPacket(packetBuffer, packetBuffer.size)
 
                 while (isActive) {
                     try {
                         receiveSocket?.receive(datagramPacket)
                         val length = datagramPacket.length
-                        if (length > HEADER_SIZE) {
-                            val pcmLength = length - HEADER_SIZE
-                            audioTrack?.write(packetBuffer, HEADER_SIZE, pcmLength)
+                        if (length <= HEADER_SIZE) continue
+
+                        // RULE 1 gate: silent discard for unauthorized sessions
+                        val authorizedSession = activeAuthorizedSessionId.get() ?: continue
+                        val packetSession = String(
+                            packetBuffer,
+                            HEADER_SENDER_ID_SIZE,
+                            HEADER_SESSION_SIZE,
+                            Charsets.UTF_8
+                        ).trimEnd { it == '\u0000' }
+                        if (packetSession != authorizedSession) continue
+
+                        val flags = packetBuffer[HEADER_FLAGS_OFFSET]
+                        val encrypted = (flags.toInt() and FLAG_ENCRYPTED.toInt()) != 0
+                        val payloadLength = length - HEADER_SIZE
+
+                        val pcm: ByteArray? = if (encrypted) {
+                            LocalCryptoEngine.decrypt(
+                                packetBuffer.copyOfRange(HEADER_SIZE, length)
+                            )
+                        } else {
+                            // Legacy/foreign plaintext packets are rejected too:
+                            // every authorized packet on this network is encrypted.
+                            null
+                        }
+
+                        if (pcm != null && pcm.isNotEmpty()) {
+                            audioTrack?.write(pcm, 0, pcm.size)
                         }
                     } catch (e: Exception) {
                         if (!isActive) break
@@ -231,10 +331,12 @@ class AudioEngine(private val context: Context) {
     }
 
     /**
-     * Start capturing local microphone and transmitting to targets.
+     * Start capturing local microphone and transmitting encrypted frames to targets.
+     * @param sessionId 8-char session key stamped into every packet header; receivers
+     *        only play frames whose key matches their authorized session.
      */
     @SuppressLint("MissingPermission")
-    fun startAudioRecording(myId: String, currentRoom: String) {
+    fun startAudioRecording(myId: String, currentRoom: String, sessionId: String = currentRoom.take(HEADER_SESSION_SIZE)) {
         if (recordingJob?.isActive == true) return
 
         configureAudioMode(true)
@@ -275,23 +377,31 @@ class AudioEngine(private val context: Context) {
                     }
                 }
 
-                audioRecord?.startRecording()
-                _isRecording.value = true
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    audioRecord?.startRecording()
+                    _isRecording.value = true
+                } else {
+                    Log.e(TAG, "RECORD_AUDIO permission not granted, cannot start recording")
+                    return@launch
+                }
 
                 val pcmBuffer = ByteArray(FRAME_SIZE)
-                val sendBuffer = ByteArray(FRAME_SIZE + HEADER_SIZE)
+                val frameBuffer = ByteArray(HEADER_SIZE + FRAME_SIZE + LocalCryptoEngine.NONCE_SIZE + 16)
 
                 // Header info
-                val idBytes = myId.toByteArray(Charsets.UTF_8).copyOf(32)
-                val roomBytes = currentRoom.toByteArray(Charsets.UTF_8).copyOf(8)
-                System.arraycopy(idBytes, 0, sendBuffer, 0, 32)
-                System.arraycopy(roomBytes, 0, sendBuffer, 32, 8)
+                val idBytes = myId.toByteArray(Charsets.UTF_8).copyOf(HEADER_SENDER_ID_SIZE)
+                val sessionBytes = sessionId.take(HEADER_SESSION_SIZE)
+                    .toByteArray(Charsets.UTF_8)
+                    .copyOf(HEADER_SESSION_SIZE)
+                System.arraycopy(idBytes, 0, frameBuffer, 0, HEADER_SENDER_ID_SIZE)
+                System.arraycopy(sessionBytes, 0, frameBuffer, HEADER_SENDER_ID_SIZE, HEADER_SESSION_SIZE)
+                frameBuffer[HEADER_FLAGS_OFFSET] = FLAG_ENCRYPTED
 
                 while (isActive) {
                     val bytesRead = audioRecord?.read(pcmBuffer, 0, FRAME_SIZE) ?: -1
                     if (bytesRead > 0) {
-                        // Calculate audio amplitude for UI level
                         if (!_isMuted.value && (_isOpenMic.value || _isPushToTalkActive.value || _isRecording.value)) {
+                            // Calculate audio amplitude for UI level
                             var sum = 0L
                             for (i in 0 until bytesRead step 2) {
                                 val sample = (pcmBuffer[i].toInt() and 0xFF) or (pcmBuffer[i + 1].toInt() shl 8)
@@ -301,21 +411,23 @@ class AudioEngine(private val context: Context) {
                             val normalized = (avg / 32767f).coerceIn(0f, 1f)
                             _micLevel.value = normalized
 
-                            // Copy PCM into send buffer
-                            System.arraycopy(pcmBuffer, 0, sendBuffer, HEADER_SIZE, bytesRead)
+                            // RULE 5: AES-256-GCM encryption of the raw PCM frame
+                            val cipherPayload = LocalCryptoEngine.encrypt(pcmBuffer.copyOf(bytesRead))
+                            if (HEADER_SIZE + cipherPayload.size <= frameBuffer.size) {
+                                System.arraycopy(cipherPayload, 0, frameBuffer, HEADER_SIZE, cipherPayload.size)
 
-                            // Send to active targets
-                            for ((_, target) in activeTargetAddresses) {
-                                try {
-                                    val packet = DatagramPacket(
-                                        sendBuffer,
-                                        HEADER_SIZE + bytesRead,
-                                        target.first,
-                                        target.second
-                                    )
-                                    sendSocket?.send(packet)
-                                } catch (e: Exception) {
-                                    // Ignore individual dropped packets
+                                for ((_, target) in activeTargetAddresses) {
+                                    try {
+                                        val packet = DatagramPacket(
+                                            frameBuffer,
+                                            HEADER_SIZE + cipherPayload.size,
+                                            target.first,
+                                            target.second
+                                        )
+                                        sendSocket?.send(packet)
+                                    } catch (e: Exception) {
+                                        // Ignore individual dropped packets
+                                    }
                                 }
                             }
                         } else {
@@ -331,8 +443,8 @@ class AudioEngine(private val context: Context) {
         }
     }
 
-    fun startRecording(myId: String, currentRoom: String) {
-        startAudioRecording(myId, currentRoom)
+    fun startRecording(myId: String, currentRoom: String, sessionId: String = currentRoom.take(HEADER_SESSION_SIZE)) {
+        startAudioRecording(myId, currentRoom, sessionId)
     }
 
     fun stopAudioRecording() {
@@ -367,6 +479,8 @@ class AudioEngine(private val context: Context) {
 
     private fun stopPlaybackInternal() {
         try {
+            audioTrack?.pause()
+            audioTrack?.flush()
             audioTrack?.stop()
             audioTrack?.release()
         } catch (e: Exception) {
@@ -382,6 +496,7 @@ class AudioEngine(private val context: Context) {
     }
 
     fun stopAllAudio() {
+        revokeSession()
         stopAudioRecording()
         stopAudioPlayback()
         configureAudioMode(false)

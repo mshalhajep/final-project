@@ -1,41 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- LocalConnect emblem: intersecting curved telemetry arcs around a glowing central node -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    
-    <!-- Central connection node glow -->
-    <path
-        android:fillColor="#3038BDF8"
-        android:pathData="M54,54m-28,0a28,28 0,1,1 56,0a28,28 0,1,1 -56,0" />
 
-    <!-- Video Camera Symbol -->
+    <!-- Central glowing node -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M44,40 L60,40 C62.2,40 64,41.8 64,44 L64,54 C64,56.2 62.2,58 60,58 L44,58 C41.8,58 40,56.2 40,54 L40,44 C40,41.8 41.8,40 44,40 Z" />
-    <path
-        android:fillColor="#38BDF8"
-        android:pathData="M64,46 L74,41 L74,57 L64,52 Z" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,46.5 a7.5,7.5 0 1,0 0,15 a7.5,7.5 0 1,0 0,-15 z" />
 
-    <!-- Audio / Voice Wave -->
+    <!-- Node glow ring -->
     <path
-        android:fillColor="#2DD4BF"
-        android:pathData="M34,47 L34,51 M31,45 L31,53 M28,48 L28,50 M78,47 L78,51 M81,45 L81,53"
-        android:strokeWidth="2.5"
-        android:strokeColor="#2DD4BF"
-        android:strokeLineCap="round" />
-
-    <!-- Chat Message Bubble Indicator -->
-    <path
-        android:fillColor="#FBBF24"
-        android:pathData="M42,63 C42,61.9 42.9,61 44,61 L64,61 C65.1,61 66,61.9 66,63 L66,69 C66,70.1 65.1,71 64,71 L56,71 L52,75 L52,71 L44,71 C42.9,71 42,70.1 42,69 Z" />
-
-    <!-- Peer connection dots and links -->
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M34,36 C42,28 66,28 74,36 M34,72 C42,80 66,80 74,72"
+        android:strokeColor="#66FFFFFF"
         android:strokeWidth="2"
-        android:strokeColor="#60FFFFFF"
-        android:strokeLineCap="round" />
+        android:fillColor="#00000000"
+        android:pathData="M54,41.5 a12.5,12.5 0 1,0 0,25 a12.5,12.5 0 1,0 0,-25 z" />
+
+    <!-- Inner telemetry arcs -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M39,40 A19,19 0 0,0 39,68" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M69,40 A19,19 0 0,1 69,68" />
+
+    <!-- Outer telemetry arcs -->
+    <path
+        android:strokeColor="#B3FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M32,33 A29,29 0 0,0 32,75" />
+    <path
+        android:strokeColor="#B3FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M76,33 A29,29 0 0,1 76,75" />
+
+    <!-- Arc end nodes -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M39,37.2 a2.8,2.8 0 1,0 0,5.6 a2.8,2.8 0 1,0 0,-5.6 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M69,37.2 a2.8,2.8 0 1,0 0,5.6 a2.8,2.8 0 1,0 0,-5.6 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M39,65.2 a2.8,2.8 0 1,0 0,5.6 a2.8,2.8 0 1,0 0,-5.6 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M69,65.2 a2.8,2.8 0 1,0 0,5.6 a2.8,2.8 0 1,0 0,-5.6 z" />
 </vector>

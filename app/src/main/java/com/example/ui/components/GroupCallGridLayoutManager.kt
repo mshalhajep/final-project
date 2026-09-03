@@ -301,6 +301,27 @@ fun GroupCallGridLayoutManager(
                     }
                 }
             }
+            
+            if (tiles.size > 9) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    contentAlignment = Alignment.BottomEnd
+                ) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "+${tiles.size - 9}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -686,17 +707,21 @@ private fun SelfAvatarTileView(
         ) {
             val base64 = userProfile.avatarBase64
             if (!base64.isNullOrEmpty()) {
-                val decoded = remember(base64) {
-                    try {
-                        val bytes = Base64.decode(base64, Base64.DEFAULT)
-                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    } catch (e: Exception) {
-                        null
+                var decoded by remember(base64) { mutableStateOf<Bitmap?>(null) }
+                LaunchedEffect(base64) {
+                    decoded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            val bytes = Base64.decode(base64, Base64.DEFAULT)
+                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        } catch (e: Exception) {
+                            null
+                        }
                     }
                 }
-                if (decoded != null) {
+                val bmp = decoded
+                if (bmp != null) {
                     Image(
-                        bitmap = decoded.asImageBitmap(),
+                        bitmap = bmp.asImageBitmap(),
                         contentDescription = "My Avatar",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
@@ -739,17 +764,21 @@ private fun PeerAvatarTileView(
             contentAlignment = Alignment.Center
         ) {
             if (!avatarBase64.isNullOrEmpty()) {
-                val decoded = remember(avatarBase64) {
-                    try {
-                        val bytes = Base64.decode(avatarBase64, Base64.DEFAULT)
-                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    } catch (e: Exception) {
-                        null
+                var decoded by remember(avatarBase64) { mutableStateOf<Bitmap?>(null) }
+                LaunchedEffect(avatarBase64) {
+                    decoded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            val bytes = Base64.decode(avatarBase64, Base64.DEFAULT)
+                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        } catch (e: Exception) {
+                            null
+                        }
                     }
                 }
-                if (decoded != null) {
+                val bmp = decoded
+                if (bmp != null) {
                     Image(
-                        bitmap = decoded.asImageBitmap(),
+                        bitmap = bmp.asImageBitmap(),
                         contentDescription = "Peer Avatar",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop

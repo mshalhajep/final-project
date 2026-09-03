@@ -39,6 +39,35 @@ class VoiceNotePlayer(private val context: Context) {
     private val _durationMs = MutableStateFlow(0)
     val durationMs = _durationMs.asStateFlow()
 
+    private val _playbackSpeed = MutableStateFlow(1.0f)
+    val playbackSpeed = _playbackSpeed.asStateFlow()
+
+    /**
+     * Applies the current playback speed (1.0x / 1.5x / 2.0x) — supported natively
+     * by MediaPlayer on Android 6+ through PlaybackParams.
+     */
+    fun setPlaybackSpeed(speed: Float) {
+        _playbackSpeed.value = speed.coerceIn(0.5f, 3.0f)
+        try {
+            mediaPlayer?.let { player ->
+                player.playbackParams = player.playbackParams.setSpeed(_playbackSpeed.value)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set playback speed", e)
+        }
+    }
+
+    /** Cycles 1.0x -> 1.5x -> 2.0x -> 1.0x for the voice note speed pill. */
+    fun cyclePlaybackSpeed() {
+        setPlaybackSpeed(
+            when (_playbackSpeed.value) {
+                1.0f -> 1.5f
+                1.5f -> 2.0f
+                else -> 1.0f
+            }
+        )
+    }
+
     fun togglePlayPause(messageId: String, filePath: String) {
         if (_currentlyPlayingId.value == messageId && _isPlaying.value) {
             pause()
@@ -84,14 +113,19 @@ class VoiceNotePlayer(private val context: Context) {
                 stopProgressPolling()
             }
 
-            player.setOnErrorListener { _, what, extra ->
+            player.setOnErrorListener { p, what, extra ->
                 Log.e(TAG, "MediaPlayer error: what=$what extra=$extra")
+                try { p.release() } catch (_: Exception) {}
                 stop()
                 true
             }
 
             player.start()
             _isPlaying.value = true
+            // Re-apply the chosen speed to freshly created players
+            if (_playbackSpeed.value != 1.0f) {
+                setPlaybackSpeed(_playbackSpeed.value)
+            }
             startProgressPolling()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start audio playback for $filePath", e)

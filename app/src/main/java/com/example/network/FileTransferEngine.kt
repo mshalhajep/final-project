@@ -18,11 +18,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
-import java.io.BufferedReader
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.InputStreamReader
+import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -49,8 +48,19 @@ class FileTransferEngine(private val context: Context) {
     private val BUFFER_SIZE = 512 * 1024
     private val SOCKET_BUFFER_SIZE = 4 * 1024 * 1024 // 4 MB socket buffer for max throughput
 
+    // RULE 5: files are streamed as AES-256-GCM encrypted chunks with deterministic
+    // per-chunk nonces so byte-offset resume stays aligned across sender/receiver.
+    companion object {
+        private const val CIPHER_CHUNK_PLAIN_SIZE = 64 * 1024
+        private const val GCM_TAG_BYTES = 16
+        private const val MAX_CIPHER_CHUNK = CIPHER_CHUNK_PLAIN_SIZE + GCM_TAG_BYTES
+    }
+
     // Map of fileId -> File on local storage
     private val sharedFilesMap = ConcurrentHashMap<String, File>()
+
+    // Active client sockets for in-flight downloads, allowing pause/cancel
+    private val activeDownloadSockets = ConcurrentHashMap<String, Socket>()
 
     // Map of messageId -> download progress (0.0 to 1.0)
     private val _downloadProgressMap = MutableStateFlow<Map<String, Float>>(emptyMap())
@@ -59,6 +69,17 @@ class FileTransferEngine(private val context: Context) {
     // Map of messageId -> isDownloading
     private val _downloadingIds = MutableStateFlow<Set<String>>(emptySet())
     val downloadingIds = _downloadingIds.asStateFlow()
+
+    fun cancelDownload(messageId: String) {
+        try {
+            val socket = activeDownloadSockets.remove(messageId)
+            socket?.close()
+            _downloadingIds.value = _downloadingIds.value - messageId
+            Log.d(TAG, "Download cancelled/paused for message $messageId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cancelling download for $messageId", e)
+        }
+    }
 
     init {
         startServer()
@@ -98,8 +119,57 @@ class FileTransferEngine(private val context: Context) {
     }
 
     /**
+     * Reads one header line ("...\n") manually so the raw stream is never over-read
+     * by a buffered reader before the encrypted payload begins.
+     */
+    private fun readLineSafely(input: InputStream): String? {
+        val sb = StringBuilder()
+        var prev = -1
+        while (true) {
+            val b = input.read()
+            if (b == -1) return if (sb.isEmpty()) null else sb.toString()
+            if (b == '\n'.code) {
+                if (prev == '\r'.code) sb.setLength(sb.length - 1)
+                return sb.toString()
+            }
+            if (sb.length > 1024) return null
+            sb.append(b.toChar())
+            prev = b
+        }
+    }
+
+    /** Reads exactly [len] bytes, returning false when the stream ends early. */
+    private fun readFully(input: InputStream, buffer: ByteArray, offset: Int, len: Int): Boolean {
+        var pos = offset
+        var remaining = len
+        while (remaining > 0) {
+            val read = input.read(buffer, pos, remaining)
+            if (read == -1) return false
+            pos += read
+            remaining -= read
+        }
+        return true
+    }
+
+    /** Writes a 4-byte big-endian length prefix. */
+    private fun writeIntBE(output: BufferedOutputStream, value: Int) {
+        output.write((value shr 24) and 0xFF)
+        output.write((value shr 16) and 0xFF)
+        output.write((value shr 8) and 0xFF)
+        output.write(value and 0xFF)
+    }
+
+    private fun readIntBE(buffer: ByteArray): Int {
+        return ((buffer[0].toInt() and 0xFF) shl 24) or
+                ((buffer[1].toInt() and 0xFF) shl 16) or
+                ((buffer[2].toInt() and 0xFF) shl 8) or
+                (buffer[3].toInt() and 0xFF)
+    }
+
+    /**
      * Handles an incoming TCP request from a peer wanting to download or resume a file.
-     * Protocol: DOWNLOAD <fileId> [offset]
+     * Protocol: DOWNLOAD <fileId> [offset]  ->  OK <totalSize> <fileName> <alignedOffset>
+     * followed by framed AES-GCM chunks: [4-byte BE cipher length][ciphertext + tag].
      */
     private fun handleClientDownloadRequest(socket: Socket) {
         try {
@@ -110,8 +180,8 @@ class FileTransferEngine(private val context: Context) {
             socket.receiveBufferSize = SOCKET_BUFFER_SIZE
             socket.soTimeout = 45000
 
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-            val requestLine = reader.readLine() ?: return
+            val inputStream = BufferedInputStream(socket.getInputStream(), BUFFER_SIZE)
+            val requestLine = readLineSafely(inputStream) ?: return
 
             val parts = requestLine.trim().split(" ")
             if (parts.size >= 2 && parts[0] == "DOWNLOAD") {
@@ -123,29 +193,49 @@ class FileTransferEngine(private val context: Context) {
 
                 if (file != null && file.exists()) {
                     val totalSize = file.length()
-                    // Send header: OK <totalSize> <fileName> <offset>
-                    val header = "OK $totalSize ${file.name} $offset\n"
+                    val alignedOffset = (offset / CIPHER_CHUNK_PLAIN_SIZE) * CIPHER_CHUNK_PLAIN_SIZE
+
+                    // Send header: OK <totalSize> <fileName> <alignedOffset>
+                    val header = "OK $totalSize ${file.name} $alignedOffset\n"
                     outStream.write(header.toByteArray(Charsets.UTF_8))
                     outStream.flush()
 
-                    val fileIn = BufferedInputStream(FileInputStream(file), BUFFER_SIZE)
-                    if (offset > 0) {
-                        var skipped = 0L
-                        while (skipped < offset) {
-                            val count = fileIn.skip(offset - skipped)
-                            if (count <= 0) break
-                            skipped += count
+                    BufferedInputStream(FileInputStream(file), BUFFER_SIZE).use { fileIn ->
+                        if (alignedOffset > 0) {
+                            var skipped = 0L
+                            while (skipped < alignedOffset) {
+                                val count = fileIn.skip(alignedOffset - skipped)
+                                if (count <= 0) break
+                                skipped += count
+                            }
                         }
-                    }
 
-                    val buffer = ByteArray(BUFFER_SIZE)
-                    var bytesRead: Int
-                    while (fileIn.read(buffer).also { bytesRead = it } != -1) {
-                        outStream.write(buffer, 0, bytesRead)
+                        val plainBuffer = ByteArray(CIPHER_CHUNK_PLAIN_SIZE)
+                        var chunkIndex = alignedOffset / CIPHER_CHUNK_PLAIN_SIZE
+
+                        while (true) {
+                            var filled = 0
+                            while (filled < CIPHER_CHUNK_PLAIN_SIZE) {
+                                val read = fileIn.read(plainBuffer, filled, CIPHER_CHUNK_PLAIN_SIZE - filled)
+                                if (read == -1) break
+                                filled += read
+                            }
+                            if (filled == 0) break
+
+                            val cipher = LocalCryptoEngine.encryptChunk(
+                                plainBuffer.copyOf(filled),
+                                fileId,
+                                chunkIndex
+                            )
+                            writeIntBE(outStream, cipher.size)
+                            outStream.write(cipher)
+                            chunkIndex++
+
+                            if (filled < CIPHER_CHUNK_PLAIN_SIZE) break
+                        }
+                        outStream.flush()
                     }
-                    outStream.flush()
-                    fileIn.close()
-                    Log.d(TAG, "Successfully served file: ${file.name} (from offset $offset/$totalSize) to ${socket.inetAddress.hostAddress}")
+                    Log.d(TAG, "Served encrypted stream: ${file.name} (from offset $alignedOffset/$totalSize) to ${socket.inetAddress.hostAddress}")
                 } else {
                     outStream.write("ERROR FILE_NOT_FOUND\n".toByteArray(Charsets.UTF_8))
                     outStream.flush()
@@ -160,6 +250,28 @@ class FileTransferEngine(private val context: Context) {
                 // Ignore
             }
         }
+    }
+
+    /**
+     * Guarantees the file name carries a correct extension derived from its MIME
+     * type. Content-Resolver display names often arrive extensionless; saving such
+     * files verbatim makes external viewers misclassify them (e.g. images opened
+     * by an archive/zip viewer).
+     */
+    fun ensureFileExtension(fileName: String, mimeType: String?): String {
+        if (fileName.contains('.')) return fileName
+        val mime = (mimeType ?: "").lowercase()
+        val ext = when {
+            mime.startsWith("image/") -> mime.substringAfter("image/", "jpg")
+            mime.startsWith("video/") -> mime.substringAfter("video/", "mp4")
+            mime.startsWith("audio/") -> mime.substringAfter("audio/", "m4a")
+            mime == "application/pdf" -> "pdf"
+            mime == "text/plain" -> "txt"
+            mime == "application/zip" -> "zip"
+            mime == "application/json" -> "json"
+            else -> null
+        }
+        return if (ext.isNullOrBlank()) fileName else "$fileName.$ext"
     }
 
     /**
@@ -181,10 +293,13 @@ class FileTransferEngine(private val context: Context) {
             }
 
             val mimeType = contentResolver.getType(uri) ?: getMimeTypeFromFileName(fileName)
+            // Force a correct extension so receivers open the file with the right app
+            fileName = ensureFileExtension(fileName, mimeType)
 
             val sharedDir = File(context.filesDir, "shared_p2p_files").apply { mkdirs() }
-            val fileId = UUID.randomUUID().toString().substring(0, 8)
-            val stagedFile = File(sharedDir, "${fileId}_$fileName")
+            val fileId = UUID.randomUUID().toString().substring(0, 12)
+            val sanitizedName = File(fileName).name.replace(Regex("[^a-zA-Z0-9._\\-\\u0600-\\u06FF ]"), "_")
+            val stagedFile = File(sharedDir, "${fileId}_$sanitizedName")
 
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(stagedFile).use { output ->
@@ -217,7 +332,7 @@ class FileTransferEngine(private val context: Context) {
      * Prepares and stages an existing local file (e.g. recorded voice note) for P2P sharing without re-copying.
      */
     fun stageExistingFile(file: File, mimeType: String = "audio/m4a"): SharedFileInfo {
-        val fileId = UUID.randomUUID().toString().substring(0, 8)
+        val fileId = UUID.randomUUID().toString().substring(0, 12)
         sharedFilesMap[fileId] = file
         Log.d(TAG, "Staged existing local file: ${file.name} ($fileId)")
         return SharedFileInfo(
@@ -237,14 +352,17 @@ class FileTransferEngine(private val context: Context) {
         fileId: String,
         fileName: String,
         expectedSize: Long,
-        senderIp: String
+        senderIp: String,
+        mimeType: String? = null
     ): File? = withContext(Dispatchers.IO) {
         var socket: Socket? = null
         try {
             _downloadingIds.value = _downloadingIds.value + messageId
 
-            val categoryDir = StorageUtils.getCategoryDir(context, fileName)
-            val destinationFile = File(categoryDir, fileName)
+            // Correct extensionless names so the saved file opens with the right viewer
+            val safeFileName = ensureFileExtension(fileName, mimeType)
+            val categoryDir = StorageUtils.getCategoryDir(context, safeFileName)
+            val destinationFile = File(categoryDir, safeFileName)
 
             // If file is already fully downloaded and matches size, return it directly
             if (destinationFile.exists() && expectedSize > 0 && destinationFile.length() == expectedSize) {
@@ -271,6 +389,7 @@ class FileTransferEngine(private val context: Context) {
                 soTimeout = 45000
             }
             socket.connect(InetSocketAddress(senderIp, NetworkUtils.FILE_PORT), 8000)
+            activeDownloadSockets[messageId] = socket
 
             val outStream = BufferedOutputStream(socket.getOutputStream(), BUFFER_SIZE)
             // Send request with existing offset for resumption
@@ -279,8 +398,7 @@ class FileTransferEngine(private val context: Context) {
             outStream.flush()
 
             val inStream = BufferedInputStream(socket.getInputStream(), BUFFER_SIZE)
-            val reader = BufferedReader(InputStreamReader(inStream))
-            val responseHeader = reader.readLine() ?: throw Exception("Empty server response")
+            val responseHeader = readLineSafely(inStream) ?: throw Exception("Empty server response")
 
             val headerParts = responseHeader.trim().split(" ")
             if (headerParts.isEmpty() || headerParts[0] != "OK") {
@@ -288,35 +406,61 @@ class FileTransferEngine(private val context: Context) {
             }
 
             val remoteTotalSize = headerParts.getOrNull(1)?.toLongOrNull() ?: expectedSize
-            val startOffset = if (headerParts.size >= 4) headerParts[3].toLongOrNull() ?: 0L else existingBytes
+            val alignedStartOffset = if (headerParts.size >= 4) {
+                headerParts[3].toLongOrNull() ?: 0L
+            } else existingBytes
+            val bytesToSkipInitially = (existingBytes - alignedStartOffset).coerceAtLeast(0L)
 
-            // Open part file in append mode if starting from offset > 0
-            val appendMode = startOffset > 0 && partFile.exists() && partFile.length() == startOffset
-            val fileOut = FileOutputStream(partFile, appendMode)
+            // Open part file in append mode if resuming from a previous partial download
+            val appendMode = alignedStartOffset > 0 && partFile.exists() && partFile.length() == alignedStartOffset
+            var bytesWritten = 0L
+            FileOutputStream(partFile, appendMode).use { fileOut ->
+                var bytesToSkip = bytesToSkipInitially
+                var chunkIndex = alignedStartOffset / CIPHER_CHUNK_PLAIN_SIZE
+                var lastReportTime = System.currentTimeMillis()
 
-            val buffer = ByteArray(BUFFER_SIZE)
-            var totalDownloaded = if (appendMode) startOffset else 0L
-            var lastReportTime = System.currentTimeMillis()
+                val lengthPrefix = ByteArray(4)
+                val cipherBuffer = ByteArray(MAX_CIPHER_CHUNK)
 
-            var bytesRead: Int
-            while (inStream.read(buffer).also { bytesRead = it } != -1) {
-                fileOut.write(buffer, 0, bytesRead)
-                totalDownloaded += bytesRead
+                chunkLoop@ while (true) {
+                    if (!readFully(inStream, lengthPrefix, 0, 4)) break
+                    val cipherLen = readIntBE(lengthPrefix)
+                    if (cipherLen <= 0 || cipherLen > MAX_CIPHER_CHUNK) {
+                        throw Exception("Corrupt encrypted chunk stream (len=$cipherLen)")
+                    }
+                    if (!readFully(inStream, cipherBuffer, 0, cipherLen)) break
 
-                val now = System.currentTimeMillis()
-                if (now - lastReportTime > 80 || (remoteTotalSize > 0 && totalDownloaded >= remoteTotalSize)) {
-                    lastReportTime = now
-                    val progress = if (remoteTotalSize > 0) (totalDownloaded.toFloat() / remoteTotalSize).coerceIn(0f, 1f) else 0.5f
-                    _downloadProgressMap.value = _downloadProgressMap.value + (messageId to progress)
-                }
+                    val plain = LocalCryptoEngine.decryptChunk(
+                        cipherBuffer.copyOf(cipherLen),
+                        fileId,
+                        chunkIndex
+                    ) ?: throw Exception("AEAD authentication failed on chunk $chunkIndex")
+                    chunkIndex++
 
-                if (remoteTotalSize > 0 && totalDownloaded >= remoteTotalSize) {
-                    break
+                    var start = 0
+                    if (bytesToSkip > 0) {
+                        val skip = minOf(bytesToSkip, plain.size.toLong()).toInt()
+                        start = skip
+                        bytesToSkip -= skip
+                    }
+                    if (start < plain.size) {
+                        fileOut.write(plain, start, plain.size - start)
+                        bytesWritten += (plain.size - start)
+                    }
+
+                    val totalWritten = existingBytes + bytesWritten
+                    val now = System.currentTimeMillis()
+                    if (now - lastReportTime > 80 || (remoteTotalSize > 0 && totalWritten >= remoteTotalSize)) {
+                        lastReportTime = now
+                        val progress = if (remoteTotalSize > 0) {
+                            (totalWritten.toFloat() / remoteTotalSize).coerceIn(0f, 1f)
+                        } else 0.5f
+                        _downloadProgressMap.value = _downloadProgressMap.value + (messageId to progress)
+                    }
+
+                    if (remoteTotalSize > 0 && totalWritten >= remoteTotalSize) break@chunkLoop
                 }
             }
-
-            fileOut.flush()
-            fileOut.close()
 
             // When completely downloaded, rename from .part to final destination in LocalConnect directory
             if (partFile.exists()) {
@@ -330,19 +474,28 @@ class FileTransferEngine(private val context: Context) {
                 }
             }
 
-            // Scan file with MediaScanner to immediately show in Gallery / Files
+            // Register the file with the system media index (MediaStore on Android 10+)
             val mime = getMimeTypeFromFileName(destinationFile.name)
-            StorageUtils.scanFile(context, destinationFile, mime)
+            StorageUtils.registerDownloadedFile(context, destinationFile, mime)
 
             _downloadProgressMap.value = _downloadProgressMap.value + (messageId to 1.0f)
-            Log.d(TAG, "Downloaded file successfully: ${destinationFile.absolutePath} ($totalDownloaded bytes)")
+            Log.d(TAG, "Downloaded encrypted file successfully: ${destinationFile.absolutePath} ($bytesWritten bytes)")
 
             destinationFile
         } catch (e: Exception) {
-            Log.e(TAG, "Failed downloading file from $senderIp", e)
-            _downloadProgressMap.value = _downloadProgressMap.value - messageId
+            Log.d(TAG, "Download paused or cancelled for $messageId: ${e.message}")
+            // Retain the partial progress so the user sees "استئناف التحميل (X%)"
+            val tempDir = File(context.cacheDir, "p2p_downloads_temp")
+            val partFile = File(tempDir, "${fileId}_${fileName}.part")
+            if (partFile.exists() && expectedSize > 0) {
+                val currentProgress = (partFile.length().toFloat() / expectedSize).coerceIn(0.01f, 0.99f)
+                _downloadProgressMap.value = _downloadProgressMap.value + (messageId to currentProgress)
+            } else {
+                _downloadProgressMap.value = _downloadProgressMap.value - messageId
+            }
             null
         } finally {
+            activeDownloadSockets.remove(messageId)
             _downloadingIds.value = _downloadingIds.value - messageId
             try {
                 socket?.close()
@@ -350,6 +503,12 @@ class FileTransferEngine(private val context: Context) {
                 // Ignore
             }
         }
+    }
+
+    /** Heuristic image-name check used to force the image MIME family on open. */
+    private fun isImageFile(fileName: String): Boolean {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext in listOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif")
     }
 
     /**
@@ -369,7 +528,17 @@ class FileTransferEngine(private val context: Context) {
                 file
             )
 
-            val resolvedMimeType = mimeType ?: getMimeTypeFromFileName(file.name)
+            // Resolve from the actual file name when the stored MIME is missing or
+            // generic; extensionless images are forced to image/* so Android offers
+            // a gallery/photo viewer instead of an archive (zip) app.
+            val storedMime = mimeType
+            val fileNameMime = getMimeTypeFromFileName(file.name)
+            val resolvedMimeType = when {
+                !storedMime.isNullOrBlank() && storedMime != "*/*" -> storedMime
+                fileNameMime != "*/*" -> fileNameMime
+                isImageFile(file.name) -> "image/*"
+                else -> "*/*"
+            }
 
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, resolvedMimeType)

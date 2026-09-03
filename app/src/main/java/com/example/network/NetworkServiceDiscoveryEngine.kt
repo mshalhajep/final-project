@@ -35,6 +35,12 @@ class NetworkServiceDiscoveryEngine(private val context: Context) {
     private var isRegistered = false
     private var isDiscovering = false
 
+    // NsdManager resolves ONE service at a time platform-wide; concurrent resolve
+    // calls fail with FAILURE_ALREADY_ACTIVE. Serialize through a FIFO queue.
+    private val resolveQueue = java.util.concurrent.ConcurrentLinkedQueue<NsdServiceInfo>()
+    @Volatile
+    private var isResolveInFlight = false
+
     private var localServiceName = ""
 
     fun startDiscoveryAndRegistration(peerId: String, username: String, port: Int = NetworkUtils.DISCOVERY_PORT) {
@@ -60,7 +66,8 @@ class NetworkServiceDiscoveryEngine(private val context: Context) {
             serviceType = SERVICE_TYPE
             setPort(port)
             setAttribute("peer_id", peerId)
-            setAttribute("username", username)
+            // Use hashed username so it's not cleartext
+            setAttribute("username", username.hashCode().toString())
         }
 
         registrationListener = object : NsdManager.RegistrationListener {
@@ -143,23 +150,41 @@ class NetworkServiceDiscoveryEngine(private val context: Context) {
 
     private fun resolveService(serviceInfo: NsdServiceInfo) {
         if (nsdManager == null) return
+        if (activeResolvedServices.containsKey(serviceInfo.serviceName)) return
+
+        resolveQueue.add(serviceInfo)
+        drainResolveQueue()
+    }
+
+    /** Resolves queued services strictly one-by-one to avoid FAILURE_ALREADY_ACTIVE. */
+    private fun drainResolveQueue() {
+        if (nsdManager == null) return
+        if (isResolveInFlight) return
+        val next = resolveQueue.poll() ?: return
+        isResolveInFlight = true
 
         val resolveListener = object : NsdManager.ResolveListener {
             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                 Log.e(TAG, "Resolve failed for ${serviceInfo.serviceName}: Error code $errorCode")
+                isResolveInFlight = false
+                drainResolveQueue()
             }
 
             override fun onServiceResolved(resolvedService: NsdServiceInfo) {
                 Log.d(TAG, "Service resolved: ${resolvedService.serviceName} at ${resolvedService.host?.hostAddress}:${resolvedService.port}")
                 activeResolvedServices[resolvedService.serviceName] = resolvedService
                 updatePeersList()
+                isResolveInFlight = false
+                drainResolveQueue()
             }
         }
 
         try {
-            nsdManager.resolveService(serviceInfo, resolveListener)
+            nsdManager.resolveService(next, resolveListener)
         } catch (e: Exception) {
             Log.e(TAG, "Exception resolving NSD service", e)
+            isResolveInFlight = false
+            drainResolveQueue()
         }
     }
 

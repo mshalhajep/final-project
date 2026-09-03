@@ -33,7 +33,8 @@ data class ChatMessageEntity(
     val localFilePath: String? = null,
     val isDownloaded: Boolean = false,
     val isRead: Boolean = true,
-    val isEdited: Boolean = false
+    val isEdited: Boolean = false,
+    val deliveryStatus: Int = 0
 )
 
 @Entity(tableName = "saved_rooms")
@@ -83,6 +84,13 @@ interface ChatDao {
 
     @Query("UPDATE chat_messages SET isRead = 1 WHERE targetRoomOrPeerId = :targetId")
     suspend fun markMessagesAsRead(targetId: String)
+
+    /**
+     * Monotonic delivery-status upgrade (SENT -> DELIVERED -> READ):
+     * a late ACK can never downgrade an already-READ message.
+     */
+    @Query("UPDATE chat_messages SET deliveryStatus = :status WHERE id = :messageId AND deliveryStatus < :status")
+    suspend fun upgradeMessageDeliveryStatus(messageId: String, status: Int)
 
     @Query("UPDATE chat_messages SET content = :newContent, isEdited = 1 WHERE id = :messageId")
     suspend fun updateMessageContent(messageId: String, newContent: String)
@@ -137,7 +145,18 @@ interface ChatDao {
     suspend fun updateUserStatus(username: String, userStatus: String)
 }
 
-@Database(entities = [ChatMessageEntity::class, RoomEntity::class, UserAccountEntity::class], version = 6, exportSchema = false)
+@Database(entities = [ChatMessageEntity::class, RoomEntity::class, UserAccountEntity::class], version = 7, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
+
+    companion object {
+        /** v7: adds chat_messages.deliveryStatus for delivery/read receipts (no data loss). */
+        val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(connection: androidx.sqlite.db.SupportSQLiteDatabase) {
+                connection.execSQL(
+                    "ALTER TABLE chat_messages ADD COLUMN deliveryStatus INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+    }
 }

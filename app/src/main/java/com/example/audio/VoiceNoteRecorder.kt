@@ -53,6 +53,12 @@ class VoiceNoteRecorder(private val context: Context) {
         if (_isRecording.value) return false
 
         try {
+            val freeSpace = context.cacheDir.usableSpace
+            if (freeSpace < 10 * 1024 * 1024) { // < 10 MB
+                Log.e(TAG, "Insufficient storage space for voice recording")
+                return false
+            }
+            
             val voiceNotesDir = File(context.filesDir, "voice_notes").apply { mkdirs() }
             val outputFile = File(voiceNotesDir, "voice_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(6)}.m4a")
             currentOutputFile = outputFile

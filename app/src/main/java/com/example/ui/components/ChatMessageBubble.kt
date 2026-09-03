@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
@@ -36,11 +38,14 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forward
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
+import com.example.ui.theme.AccentRose
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -68,22 +73,59 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.collection.LruCache
 import com.example.model.ChatMessage
+import com.example.model.DELIVERY_DELIVERED
+import com.example.model.DELIVERY_READ
 import com.example.model.MessageType
 import com.example.network.NetworkUtils
 import com.example.ui.theme.PrimaryPurple
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.absoluteValue
+
+/**
+ * Shared in-memory bitmap cache for chat images. Prevents repeated Base64 decoding
+ * while scrolling through long message lists (decoding previously ran on the UI
+ * thread once per bubble instance and was discarded on every scroll pass).
+ */
+object ChatImageCache {
+    private const val MAX_POOL_BYTES = 32 * 1024 * 1024 // 32 MB
+
+    private val pool = object : LruCache<String, Bitmap>(MAX_POOL_BYTES) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
+
+    fun get(key: String): Bitmap? = pool.get(key)
+    fun put(key: String, value: Bitmap) {
+        pool.put(key, value)
+    }
+
+    /** Decodes bytes with a sub-sampling factor so huge photos stay memory-safe. */
+    fun decodeScaled(bytes: ByteArray, maxDim: Int = 1024): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= maxDim || bounds.outHeight / (sample * 2) >= maxDim) {
+            sample *= 2
+        }
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+    }
+}
 
 @Composable
 fun ChatMessageBubble(
@@ -96,13 +138,18 @@ fun ChatMessageBubble(
     playingVoiceMessageId: String? = null,
     voiceNoteProgress: Float = 0f,
     voiceNoteCurrentMs: Int = 0,
+    playbackSpeed: Float = 1f,
     onTogglePlayVoiceNote: (ChatMessage) -> Unit = {},
     onSeekVoiceNote: (Float) -> Unit = {},
+    onCyclePlaybackSpeed: () -> Unit = {},
+    onOpenImage: (ChatMessage) -> Unit = {},
     onEditClick: ((ChatMessage) -> Unit)? = null,
     onDeleteClick: ((ChatMessage) -> Unit)? = null,
-    onForwardClick: ((ChatMessage) -> Unit)? = null
+    onForwardClick: ((ChatMessage) -> Unit)? = null,
+    onCancelDownloadClick: (ChatMessage) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val hapticFeedback = LocalHapticFeedback.current
     val clipboardManager = LocalClipboardManager.current
     val isMine = message.isMine
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -114,23 +161,49 @@ fun ChatMessageBubble(
         mutableStateOf<Bitmap?>(null)
     }
 
-    LaunchedEffect(message.imageBase64, message.localFilePath) {
-        if (message.imageBase64 != null) {
+    // Cached, sub-sampled, off-main-thread decode (single decode per unique source)
+    val imageCacheKey = when {
+        message.imageBase64 != null -> "b64_${message.imageBase64.hashCode()}"
+        message.localFilePath != null -> "file_${message.localFilePath}"
+        else -> null
+    }
+
+    LaunchedEffect(imageCacheKey) {
+        if (imageCacheKey == null) return@LaunchedEffect
+        val cached = ChatImageCache.get(imageCacheKey)
+        if (cached != null && !cached.isRecycled) {
+            decodedBitmap = cached
+            return@LaunchedEffect
+        }
+        val decoded = withContext(Dispatchers.Default) {
             try {
-                val bytes = Base64.decode(message.imageBase64, Base64.NO_WRAP)
-                decodedBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            } catch (e: Exception) {
-                // Ignore
-            }
-        } else if (message.localFilePath != null && (message.mimeType?.startsWith("image/") == true || message.messageType == MessageType.IMAGE)) {
-            try {
-                val f = File(message.localFilePath)
-                if (f.exists()) {
-                    decodedBitmap = BitmapFactory.decodeFile(f.absolutePath)
+                when {
+                    message.imageBase64 != null ->
+                        ChatImageCache.decodeScaled(Base64.decode(message.imageBase64, Base64.NO_WRAP))
+                    message.localFilePath != null &&
+                            (message.mimeType?.startsWith("image/") == true || message.messageType == MessageType.IMAGE) -> {
+                        val f = File(message.localFilePath)
+                        if (f.exists()) {
+                            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            BitmapFactory.decodeFile(f.absolutePath, options)
+                            var sample = 1
+                            while (options.outWidth / (sample * 2) >= 1024 || options.outHeight / (sample * 2) >= 1024) {
+                                sample *= 2
+                            }
+                            options.inSampleSize = sample
+                            options.inJustDecodeBounds = false
+                            BitmapFactory.decodeFile(f.absolutePath, options)
+                        } else null
+                    }
+                    else -> null
                 }
-            } catch (e: Exception) {
-                // Ignore
+            } catch (e: Throwable) {
+                null
             }
+        }
+        if (decoded != null) {
+            ChatImageCache.put(imageCacheKey, decoded)
+            decodedBitmap = decoded
         }
     }
 
@@ -178,6 +251,8 @@ fun ChatMessageBubble(
                                 showMenu = true
                             },
                             onLongPress = {
+                                // Subtle tactile confirmation when opening the context menu
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                 showMenu = true
                             }
                         )
@@ -194,7 +269,7 @@ fun ChatMessageBubble(
                     Spacer(modifier = Modifier.height(2.dp))
                 }
 
-                // If image preview is available
+                // If image preview is available — tap opens the in-app zoom viewer
                 if (decodedBitmap != null) {
                     Image(
                         bitmap = decodedBitmap!!.asImageBitmap(),
@@ -204,7 +279,11 @@ fun ChatMessageBubble(
                             .height(180.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .clickable {
-                                if (message.localFilePath != null) {
+                                if (message.imageBase64 != null ||
+                                    (message.localFilePath != null && File(message.localFilePath).exists())
+                                ) {
+                                    onOpenImage(message)
+                                } else if (message.localFilePath != null) {
                                     onOpenFileClick(message)
                                 }
                             },
@@ -223,8 +302,10 @@ fun ChatMessageBubble(
                         currentMs = if (playingVoiceMessageId == message.id) voiceNoteCurrentMs else 0,
                         downloadProgress = downloadProgress,
                         isDownloading = isDownloading,
+                        playbackSpeed = playbackSpeed,
                         onTogglePlay = { onTogglePlayVoiceNote(message) },
                         onSeek = onSeekVoiceNote,
+                        onCycleSpeed = onCyclePlaybackSpeed,
                         onDownloadClick = { onDownloadClick(message) }
                     )
                     Spacer(modifier = Modifier.height(4.dp))
@@ -238,7 +319,8 @@ fun ChatMessageBubble(
                         downloadProgress = downloadProgress,
                         isDownloading = isDownloading,
                         onDownloadClick = { onDownloadClick(message) },
-                        onOpenFileClick = { onOpenFileClick(message) }
+                        onOpenFileClick = { onOpenFileClick(message) },
+                        onCancelDownloadClick = { onCancelDownloadClick(message) }
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                 }
@@ -276,12 +358,27 @@ fun ChatMessageBubble(
                     )
                     if (isMine) {
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = if (message.isRead) "✓✓" else "✓",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (message.isRead) Color(0xFF4ADE80) else Color.White.copy(alpha = 0.8f)
-                        )
+                        // Delivery ticks: single = sent, double gray = delivered, double blue = read
+                        when {
+                            message.deliveryStatus >= DELIVERY_READ -> Icon(
+                                imageVector = Icons.Default.DoneAll,
+                                contentDescription = "تمت القراءة",
+                                tint = Color(0xFF38BDF8),
+                                modifier = Modifier.size(15.dp)
+                            )
+                            message.deliveryStatus == DELIVERY_DELIVERED -> Icon(
+                                imageVector = Icons.Default.DoneAll,
+                                contentDescription = "تم التسليم",
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.size(15.dp)
+                            )
+                            else -> Icon(
+                                imageVector = Icons.Default.Done,
+                                contentDescription = "تم الإرسال",
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -363,12 +460,25 @@ private fun VoiceNoteCard(
     currentMs: Int,
     downloadProgress: Float,
     isDownloading: Boolean,
+    playbackSpeed: Float,
     onTogglePlay: () -> Unit,
     onSeek: (Float) -> Unit,
+    onCycleSpeed: () -> Unit,
     onDownloadClick: () -> Unit
 ) {
     val durationSeconds = message.durationSeconds ?: 0
-    val isDownloaded = message.isDownloaded || message.isMine || (message.localFilePath != null && File(message.localFilePath).exists())
+    var isDownloaded by remember(message.isDownloaded, message.isMine, message.localFilePath) {
+        mutableStateOf(message.isDownloaded || message.isMine)
+    }
+    LaunchedEffect(message.localFilePath) {
+        if (!isDownloaded && message.localFilePath != null) {
+            withContext(Dispatchers.IO) {
+                if (File(message.localFilePath).exists()) {
+                    isDownloaded = true
+                }
+            }
+        }
+    }
 
     // Generate waveform bar heights deterministically based on message ID hash
     val barCount = 22
@@ -412,19 +522,39 @@ private fun VoiceNoteCard(
                     )
                 }
 
-                // Duration badge
-                Text(
-                    text = if (isCurrentlyPlaying) {
-                        val currentSec = currentMs / 1000
-                        val currentFraction = (currentMs % 1000) / 100
-                        "$currentSec.$currentFraction / ${durationSeconds}s"
-                    } else {
-                        "${durationSeconds}s"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isMine) Color.White.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // Speed + Duration badges
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Playback speed pill: 1.0x -> 1.5x -> 2.0x
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isMine) Color.White.copy(alpha = 0.22f) else PrimaryPurple.copy(alpha = 0.14f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(onClick = onCycleSpeed)
+                            .testTag("voice_speed_button")
+                    ) {
+                        Text(
+                            text = String.format(Locale.US, "%.1fx", playbackSpeed),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isMine) Color.White else PrimaryPurple,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isCurrentlyPlaying) {
+                            val currentSec = currentMs / 1000
+                            val currentFraction = (currentMs % 1000) / 100
+                            "$currentSec.$currentFraction / ${durationSeconds}s"
+                        } else {
+                            "${durationSeconds}s"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isMine) Color.White.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -528,7 +658,8 @@ private fun FileAttachmentCard(
     downloadProgress: Float,
     isDownloading: Boolean,
     onDownloadClick: () -> Unit,
-    onOpenFileClick: () -> Unit
+    onOpenFileClick: () -> Unit,
+    onCancelDownloadClick: () -> Unit = {}
 ) {
     val fileName = message.fileName ?: "ملف مرفق"
     val fileSizeFormatted = NetworkUtils.formatFileSize(message.fileSize)
@@ -591,17 +722,45 @@ private fun FileAttachmentCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "جاري التنزيل...",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isMine) Color.White else MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = "${(downloadProgress * 100).toInt()}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isMine) Color.White else MaterialTheme.colorScheme.primary
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = if (isMine) Color.White else MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "جاري التنزيل...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isMine) Color.White else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "${(downloadProgress * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isMine) Color.White else MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = CircleShape,
+                                color = AccentRose.copy(alpha = 0.2f),
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .clickable(onClick = onCancelDownloadClick)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "إيقاف مؤقت / إلغاء",
+                                        tint = AccentRose,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     LinearProgressIndicator(
@@ -637,6 +796,7 @@ private fun FileAttachmentCard(
                     )
                 }
             } else {
+                val isResume = downloadProgress > 0.01f && downloadProgress < 0.99f
                 FilledTonalButton(
                     onClick = onDownloadClick,
                     modifier = Modifier.fillMaxWidth(),
@@ -647,13 +807,13 @@ private fun FileAttachmentCard(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.CloudDownload,
+                        imageVector = if (isResume) Icons.Default.PlayArrow else Icons.Default.CloudDownload,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "تحميل عبر Wi-Fi ($fileSizeFormatted)",
+                        text = if (isResume) "استئناف التحميل (${(downloadProgress * 100).toInt()}%)" else "تحميل عبر Wi-Fi ($fileSizeFormatted)",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold
                     )
