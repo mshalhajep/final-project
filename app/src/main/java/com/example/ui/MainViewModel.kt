@@ -951,9 +951,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (bitmap != null) {
             viewModelScope.launch(Dispatchers.IO) {
                 try {
-                    val cacheFile = File(getApplication<android.app.Application>().cacheDir, "img_${System.currentTimeMillis()}.jpg")
+                    val cacheFile = File(getApplication<android.app.Application>().cacheDir, "IMG_${System.currentTimeMillis()}.jpg")
                     val stream = FileOutputStream(cacheFile)
-                    val maxDim = 800
+                    val maxDim = 1280
                     val scaledBmp = if (bitmap.width > maxDim || bitmap.height > maxDim) {
                         val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
                         val targetW = if (ratio >= 1f) maxDim else (maxDim * ratio).toInt()
@@ -962,15 +962,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         bitmap
                     }
-                    scaledBmp.compress(Bitmap.CompressFormat.JPEG, 75, stream)
+                    scaledBmp.compress(Bitmap.CompressFormat.JPEG, 85, stream)
                     stream.flush()
                     stream.close()
                     val uri = Uri.fromFile(cacheFile)
                     val isDirect = _currentChatIsDirect.value
                     if (isDirect) {
-                        val peer = _currentChatPeer.value
+                        val peer = _currentChatPeer.value ?: discoveredPeers.value.find { it.id == _currentChatTarget.value.removePrefix("peer_") || it.id == _currentChatTarget.value }
                         if (peer != null) {
                             sendDirectFile(peer, uri, text)
+                        } else {
+                            sendInRoomFile(uri, text)
                         }
                     } else {
                         sendInRoomFile(uri, text)
@@ -1035,7 +1037,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     val cacheFile = File(getApplication<android.app.Application>().cacheDir, "img_${System.currentTimeMillis()}.jpg")
                     val stream = FileOutputStream(cacheFile)
-                    val maxDim = 800
+                    val maxDim = 1280
                     val scaledBmp = if (bitmap.width > maxDim || bitmap.height > maxDim) {
                         val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
                         val targetW = if (ratio >= 1f) maxDim else (maxDim * ratio).toInt()
@@ -1044,7 +1046,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         bitmap
                     }
-                    scaledBmp.compress(Bitmap.CompressFormat.JPEG, 75, stream)
+                    scaledBmp.compress(Bitmap.CompressFormat.JPEG, 85, stream)
                     stream.flush()
                     stream.close()
                     val uri = Uri.fromFile(cacheFile)
@@ -1070,7 +1072,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 content = text,
                 timestamp = System.currentTimeMillis(),
                 isMine = true,
-                messageType = MessageType.TEXT
+                messageType = MessageType.TEXT,
+                senderIp = if (localIp.value.isNotBlank() && localIp.value != "127.0.0.1") localIp.value else com.example.network.NetworkUtils.getLocalIpAddress(getApplication())
             )
 
             // Save to DB
@@ -1085,7 +1088,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     content = msg.content,
                     timestamp = msg.timestamp,
                     isMine = true,
-                    messageType = msg.messageType.name
+                    messageType = msg.messageType.name,
+                    imageBase64 = null,
+                    fileId = null,
+                    fileName = null,
+                    fileSize = 0L,
+                    mimeType = null,
+                    senderIp = msg.senderIp,
+                    localFilePath = null,
+                    isDownloaded = true
                 )
             )
 
@@ -1102,7 +1113,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val staged = engine.fileTransferEngine.stageFileForSharing(uri) ?: return@launch
             val roomId = currentRoom.value
             val currentProfile = userProfile.value
-            val isImage = staged.mimeType.startsWith("image/")
+            val isImage = staged.mimeType.startsWith("image/") || engine.fileTransferEngine.isImageFile(staged.fileName)
+            val resolvedIp = if (localIp.value.isNotBlank() && localIp.value != "127.0.0.1") localIp.value else com.example.network.NetworkUtils.getLocalIpAddress(getApplication())
 
             val msg = ChatMessage(
                 id = UUID.randomUUID().toString(),
@@ -1119,7 +1131,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 fileName = staged.fileName,
                 fileSize = staged.fileSize,
                 mimeType = staged.mimeType,
-                senderIp = localIp.value,
+                senderIp = resolvedIp,
                 localFilePath = staged.localFilePath,
                 isDownloaded = true
             )
@@ -1160,7 +1172,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val staged = engine.fileTransferEngine.stageFileForSharing(uri) ?: return@launch
             val currentProfile = userProfile.value
-            val isImage = staged.mimeType.startsWith("image/")
+            val isImage = staged.mimeType.startsWith("image/") || engine.fileTransferEngine.isImageFile(staged.fileName)
+            val resolvedIp = if (localIp.value.isNotBlank() && localIp.value != "127.0.0.1") localIp.value else com.example.network.NetworkUtils.getLocalIpAddress(getApplication())
 
             val msg = ChatMessage(
                 id = UUID.randomUUID().toString(),
@@ -1177,7 +1190,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 fileName = staged.fileName,
                 fileSize = staged.fileSize,
                 mimeType = staged.mimeType,
-                senderIp = localIp.value,
+                senderIp = resolvedIp,
                 localFilePath = staged.localFilePath,
                 isDownloaded = true
             )

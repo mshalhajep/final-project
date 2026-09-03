@@ -181,7 +181,8 @@ fun ChatMessageBubble(
                     message.imageBase64 != null ->
                         ChatImageCache.decodeScaled(Base64.decode(message.imageBase64, Base64.NO_WRAP))
                     message.localFilePath != null &&
-                            (message.mimeType?.startsWith("image/") == true || message.messageType == MessageType.IMAGE) -> {
+                            (message.mimeType?.startsWith("image/") == true || message.messageType == MessageType.IMAGE ||
+                                    File(message.localFilePath).name.substringAfterLast('.', "").lowercase() in listOf("jpg", "jpeg", "png", "webp", "gif", "bmp")) -> {
                         val f = File(message.localFilePath)
                         if (f.exists()) {
                             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -320,7 +321,8 @@ fun ChatMessageBubble(
                         isDownloading = isDownloading,
                         onDownloadClick = { onDownloadClick(message) },
                         onOpenFileClick = { onOpenFileClick(message) },
-                        onCancelDownloadClick = { onCancelDownloadClick(message) }
+                        onCancelDownloadClick = { onCancelDownloadClick(message) },
+                        onOpenImage = { onOpenImage(message) }
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                 }
@@ -659,12 +661,20 @@ private fun FileAttachmentCard(
     isDownloading: Boolean,
     onDownloadClick: () -> Unit,
     onOpenFileClick: () -> Unit,
-    onCancelDownloadClick: () -> Unit = {}
+    onCancelDownloadClick: () -> Unit = {},
+    onOpenImage: () -> Unit = {}
 ) {
     val fileName = message.fileName ?: "ملف مرفق"
     val fileSizeFormatted = NetworkUtils.formatFileSize(message.fileSize)
     val mimeType = message.mimeType ?: ""
     val isDownloaded = message.isDownloaded || message.isMine || message.localFilePath != null
+
+    val ext = fileName.substringAfterLast('.', "").lowercase()
+    val isImg = message.messageType == MessageType.IMAGE ||
+            mimeType.startsWith("image/") ||
+            ext in listOf("jpg", "jpeg", "png", "webp", "gif", "bmp")
+    val isVid = mimeType.startsWith("video/") ||
+            ext in listOf("mp4", "mkv", "mov", "avi", "3gp", "webm")
 
     val fileIcon = getFileIcon(fileName, mimeType)
     val cardBg = if (isMine) Color.White.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
@@ -775,7 +785,9 @@ private fun FileAttachmentCard(
                 }
             } else if (isDownloaded) {
                 FilledTonalButton(
-                    onClick = onOpenFileClick,
+                    onClick = {
+                        if (isImg) onOpenImage() else onOpenFileClick()
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = if (isMine) Color.White.copy(alpha = 0.25f) else MaterialTheme.colorScheme.secondaryContainer,
@@ -784,13 +796,22 @@ private fun FileAttachmentCard(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.OpenInNew,
+                        imageVector = when {
+                            isImg -> Icons.Default.Image
+                            isVid -> Icons.Default.Videocam
+                            else -> Icons.Default.OpenInNew
+                        },
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (isMine) "عرض / فتح الملف" else "فتح الملف المحفوظ",
+                        text = when {
+                            isImg -> "عرض الصورة"
+                            isVid -> "تشغيل الفيديو"
+                            isMine -> "عرض / فتح الملف"
+                            else -> "فتح الملف المحفوظ"
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold
                     )

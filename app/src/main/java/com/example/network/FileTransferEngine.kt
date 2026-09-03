@@ -187,7 +187,18 @@ class FileTransferEngine(private val context: Context) {
             if (parts.size >= 2 && parts[0] == "DOWNLOAD") {
                 val fileId = parts[1]
                 val offset = if (parts.size >= 3) parts[2].toLongOrNull() ?: 0L else 0L
-                val file = sharedFilesMap[fileId]
+                var file = sharedFilesMap[fileId]
+
+                // Disk auto-recovery: if not in memory, find on disk in shared_p2p_files
+                if (file == null || !file.exists()) {
+                    val sharedDir = File(context.filesDir, "shared_p2p_files")
+                    val found = sharedDir.listFiles()?.firstOrNull { it.name.startsWith("${fileId}_") }
+                    if (found != null && found.exists()) {
+                        file = found
+                        sharedFilesMap[fileId] = found
+                        Log.d(TAG, "Recovered shared file from disk: ${file.name}")
+                    }
+                }
 
                 val outStream = BufferedOutputStream(socket.getOutputStream(), BUFFER_SIZE)
 
@@ -195,8 +206,9 @@ class FileTransferEngine(private val context: Context) {
                     val totalSize = file.length()
                     val alignedOffset = (offset / CIPHER_CHUNK_PLAIN_SIZE) * CIPHER_CHUNK_PLAIN_SIZE
 
-                    // Send header: OK <totalSize> <fileName> <alignedOffset>
-                    val header = "OK $totalSize ${file.name} $alignedOffset\n"
+                    // Send header: OK <totalSize> <alignedOffset> <encodedFileName>
+                    val encodedName = java.net.URLEncoder.encode(file.name, "UTF-8")
+                    val header = "OK $totalSize $alignedOffset $encodedName\n"
                     outStream.write(header.toByteArray(Charsets.UTF_8))
                     outStream.flush()
 
@@ -253,25 +265,131 @@ class FileTransferEngine(private val context: Context) {
     }
 
     /**
-     * Guarantees the file name carries a correct extension derived from its MIME
-     * type. Content-Resolver display names often arrive extensionless; saving such
-     * files verbatim makes external viewers misclassify them (e.g. images opened
-     * by an archive/zip viewer).
+     * Determines the exact file extension and MIME type using Magic Bytes sniffing,
+     * MimeTypeMap, and file name heuristics so files are NEVER saved with .bin or wrong formats.
+     */
+    fun detectMimeAndExtension(file: File, fallbackMime: String? = null): Pair<String, String> {
+        val header = ByteArray(16)
+        var bytesRead = 0
+        try {
+            FileInputStream(file).use { fis ->
+                bytesRead = fis.read(header)
+            }
+        } catch (_: Exception) {}
+
+        // 1. Image formats by magic bytes
+        if (bytesRead >= 3 && header[0] == 0xFF.toByte() && header[1] == 0xD8.toByte() && header[2] == 0xFF.toByte()) {
+            return "image/jpeg" to "jpg"
+        }
+        if (bytesRead >= 8 && header[0] == 0x89.toByte() && header[1] == 0x50.toByte() && header[2] == 0x4E.toByte() && header[3] == 0x47.toByte()) {
+            return "image/png" to "png"
+        }
+        if (bytesRead >= 4 && header[0] == 0x47.toByte() && header[1] == 0x49.toByte() && header[2] == 0x46.toByte() && header[3] == 0x38.toByte()) {
+            return "image/gif" to "gif"
+        }
+        if (bytesRead >= 12 && header[0] == 0x52.toByte() && header[1] == 0x49.toByte() && header[2] == 0x46.toByte() && header[3] == 0x46.toByte()
+            && header[8] == 0x57.toByte() && header[9] == 0x45.toByte() && header[10] == 0x42.toByte() && header[11] == 0x50.toByte()) {
+            return "image/webp" to "webp"
+        }
+
+        // 2. Video and Audio formats
+        if (bytesRead >= 8 && header[4] == 0x66.toByte() && header[5] == 0x74.toByte() && header[6] == 0x79.toByte() && header[7] == 0x70.toByte()) {
+            // MP4 / MOV / M4A (ftyp box)
+            return if (bytesRead >= 12 && header[8] == 0x4D.toByte() && header[9] == 0x34.toByte() && header[10] == 0x41.toByte()) {
+                "audio/mp4" to "m4a"
+            } else {
+                "video/mp4" to "mp4"
+            }
+        }
+        if (bytesRead >= 4 && header[0] == 0x1A.toByte() && header[1] == 0x45.toByte() && header[2] == 0xDF.toByte() && header[3] == 0xA3.toByte()) {
+            return "video/x-matroska" to "mkv"
+        }
+        if (bytesRead >= 3 && header[0] == 0x49.toByte() && header[1] == 0x44.toByte() && header[2] == 0x33.toByte()) {
+            return "audio/mpeg" to "mp3"
+        }
+        if (bytesRead >= 2 && header[0] == 0xFF.toByte() && (header[1].toInt() and 0xE0) == 0xE0) {
+            return "audio/mpeg" to "mp3"
+        }
+        if (bytesRead >= 4 && header[0] == 0x4F.toByte() && header[1] == 0x67.toByte() && header[2] == 0x67.toByte() && header[3] == 0x53.toByte()) {
+            return "audio/ogg" to "ogg"
+        }
+
+        // 3. Document formats
+        if (bytesRead >= 4 && header[0] == 0x25.toByte() && header[1] == 0x50.toByte() && header[2] == 0x44.toByte() && header[3] == 0x46.toByte()) {
+            return "application/pdf" to "pdf"
+        }
+        if (bytesRead >= 4 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() && header[2] == 0x03.toByte() && header[3] == 0x04.toByte()) {
+            val ext = file.name.substringAfterLast('.', "").lowercase()
+            return when (ext) {
+                "apk" -> "application/vnd.android.package-archive" to "apk"
+                "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document" to "docx"
+                "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" to "xlsx"
+                "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation" to "pptx"
+                else -> "application/zip" to "zip"
+            }
+        }
+
+        // 4. File extension fallback
+        val ext = file.name.substringAfterLast('.', "").lowercase()
+        if (ext.isNotBlank() && ext.length in 2..5 && ext != "bin") {
+            val mimeFromMap = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+            if (!mimeFromMap.isNullOrBlank()) {
+                return mimeFromMap to ext
+            }
+            val mimeFromUtils = getMimeTypeFromFileName(file.name)
+            if (mimeFromUtils != "*/*") {
+                return mimeFromUtils to ext
+            }
+        }
+
+        // 5. Provided MIME fallback
+        if (!fallbackMime.isNullOrBlank() && fallbackMime != "*/*" && fallbackMime != "application/octet-stream") {
+            val extFromMap = MimeTypeMap.getSingleton().getExtensionFromMimeType(fallbackMime)
+            if (!extFromMap.isNullOrBlank()) {
+                return fallbackMime to extFromMap
+            }
+        }
+
+        return (fallbackMime ?: "application/octet-stream") to (if (ext.isNotBlank() && ext != "bin") ext else "bin")
+    }
+
+    /**
+     * Guarantees the file name carries a correct extension derived from its MIME type.
      */
     fun ensureFileExtension(fileName: String, mimeType: String?): String {
-        if (fileName.contains('.')) return fileName
+        val existingExt = fileName.substringAfterLast('.', "").lowercase()
+        if (existingExt.isNotBlank() && existingExt.length in 2..5 && existingExt != "bin") {
+            return fileName
+        }
         val mime = (mimeType ?: "").lowercase()
         val ext = when {
-            mime.startsWith("image/") -> mime.substringAfter("image/", "jpg")
-            mime.startsWith("video/") -> mime.substringAfter("video/", "mp4")
-            mime.startsWith("audio/") -> mime.substringAfter("audio/", "m4a")
+            mime.startsWith("image/jpeg") || mime.startsWith("image/jpg") -> "jpg"
+            mime.startsWith("image/png") -> "png"
+            mime.startsWith("image/webp") -> "webp"
+            mime.startsWith("image/gif") -> "gif"
+            mime.startsWith("image/") -> "jpg"
+            mime.startsWith("video/mp4") -> "mp4"
+            mime.startsWith("video/x-matroska") -> "mkv"
+            mime.startsWith("video/webm") -> "webm"
+            mime.startsWith("video/quicktime") -> "mov"
+            mime.startsWith("video/3gpp") -> "3gp"
+            mime.startsWith("video/") -> "mp4"
+            mime.startsWith("audio/mpeg") || mime.startsWith("audio/mp3") -> "mp3"
+            mime.startsWith("audio/mp4") || mime.startsWith("audio/m4a") -> "m4a"
+            mime.startsWith("audio/wav") -> "wav"
+            mime.startsWith("audio/ogg") -> "ogg"
+            mime.startsWith("audio/") -> "m4a"
             mime == "application/pdf" -> "pdf"
             mime == "text/plain" -> "txt"
             mime == "application/zip" -> "zip"
-            mime == "application/json" -> "json"
-            else -> null
+            mime == "application/vnd.android.package-archive" -> "apk"
+            else -> MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)
         }
-        return if (ext.isNullOrBlank()) fileName else "$fileName.$ext"
+        if (!ext.isNullOrBlank()) {
+            val baseName = if (existingExt == "bin" || fileName.contains('.')) fileName.substringBeforeLast('.') else fileName
+            return "$baseName.$ext"
+        }
+        return fileName
     }
 
     /**
@@ -279,51 +397,103 @@ class FileTransferEngine(private val context: Context) {
      */
     suspend fun stageFileForSharing(uri: Uri): SharedFileInfo? = withContext(Dispatchers.IO) {
         try {
-            val contentResolver = context.contentResolver
-            var fileName = "file_${System.currentTimeMillis()}"
+            var rawName = "file_${System.currentTimeMillis()}"
             var fileSize = 0L
 
-            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                if (cursor.moveToFirst()) {
-                    if (nameIndex != -1) fileName = cursor.getString(nameIndex) ?: fileName
-                    if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex)
+            // 1. Check if direct file:// URI
+            if (uri.scheme == "file" || uri.scheme.isNullOrEmpty()) {
+                val directFile = File(uri.path ?: "")
+                if (directFile.exists()) {
+                    rawName = directFile.name
+                    fileSize = directFile.length()
+                }
+            } else {
+                // 2. Query ContentResolver for content:// URI
+                try {
+                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (cursor.moveToFirst()) {
+                            if (nameIndex != -1) {
+                                val n = cursor.getString(nameIndex)
+                                if (!n.isNullOrBlank()) rawName = n
+                            }
+                            if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "ContentResolver query failed for $uri", e)
+                }
+                if (rawName.startsWith("file_") && !uri.lastPathSegment.isNullOrBlank()) {
+                    val seg = uri.lastPathSegment!!
+                    if (seg.contains('.')) rawName = seg.substringAfterLast('/')
                 }
             }
 
-            val mimeType = contentResolver.getType(uri) ?: getMimeTypeFromFileName(fileName)
-            // Force a correct extension so receivers open the file with the right app
-            fileName = ensureFileExtension(fileName, mimeType)
+            var mimeType = context.contentResolver.getType(uri) ?: getMimeTypeFromFileName(rawName)
 
             val sharedDir = File(context.filesDir, "shared_p2p_files").apply { mkdirs() }
             val fileId = UUID.randomUUID().toString().substring(0, 12)
-            val sanitizedName = File(fileName).name.replace(Regex("[^a-zA-Z0-9._\\-\\u0600-\\u06FF ]"), "_")
-            val stagedFile = File(sharedDir, "${fileId}_$sanitizedName")
+            val stagedTmp = File(sharedDir, "${fileId}_staging_tmp")
 
-            contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(stagedFile).use { output ->
+            // Copy stream safely
+            val inStream: InputStream = try {
+                if (uri.scheme == "file" || uri.scheme.isNullOrEmpty()) {
+                    FileInputStream(File(uri.path ?: ""))
+                } else {
+                    context.contentResolver.openInputStream(uri) ?: FileInputStream(File(uri.path ?: ""))
+                }
+            } catch (e: Exception) {
+                FileInputStream(File(uri.path ?: ""))
+            }
+
+            inStream.use { input ->
+                FileOutputStream(stagedTmp).use { output ->
                     input.copyTo(output, BUFFER_SIZE)
                 }
             }
 
-            if (fileSize <= 0) {
-                fileSize = stagedFile.length()
+            if (fileSize <= 0L) {
+                fileSize = stagedTmp.length()
             }
 
-            // Register in memory map for serving
-            sharedFilesMap[fileId] = stagedFile
-            Log.d(TAG, "Staged file for P2P sharing: $fileName ($fileSize bytes) id=$fileId")
+            // Sniff true MIME type and extension from the actual staged bytes!
+            val (detectedMime, detectedExt) = detectMimeAndExtension(stagedTmp, mimeType)
+            mimeType = detectedMime
+
+            var finalFileName = rawName
+            if (!finalFileName.contains('.') || finalFileName.endsWith(".bin", ignoreCase = true)) {
+                finalFileName = ensureFileExtension(finalFileName, mimeType)
+            }
+            if (!finalFileName.contains('.')) {
+                finalFileName = "$finalFileName.$detectedExt"
+            }
+
+            // Sanitize and rename
+            val sanitizedName = File(finalFileName).name.replace(Regex("[^a-zA-Z0-9._\\-\\u0600-\\u06FF ]"), "_")
+            val permanentStagedFile = File(sharedDir, "${fileId}_$sanitizedName")
+            if (stagedTmp.exists()) {
+                if (permanentStagedFile.exists()) permanentStagedFile.delete()
+                val moved = stagedTmp.renameTo(permanentStagedFile)
+                if (!moved) {
+                    stagedTmp.copyTo(permanentStagedFile, overwrite = true)
+                    stagedTmp.delete()
+                }
+            }
+
+            // Register in memory map
+            sharedFilesMap[fileId] = permanentStagedFile
+            Log.d(TAG, "Staged file for P2P sharing: $finalFileName ($fileSize bytes, mime=$mimeType) id=$fileId")
 
             SharedFileInfo(
                 fileId = fileId,
-                fileName = fileName,
+                fileName = finalFileName,
                 fileSize = fileSize,
                 mimeType = mimeType,
-                localFilePath = stagedFile.absolutePath
+                localFilePath = permanentStagedFile.absolutePath
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to stage file for sharing", e)
+            Log.e(TAG, "Failed to stage file for sharing: uri=$uri", e)
             null
         }
     }
@@ -406,13 +576,22 @@ class FileTransferEngine(private val context: Context) {
             }
 
             val remoteTotalSize = headerParts.getOrNull(1)?.toLongOrNull() ?: expectedSize
-            val alignedStartOffset = if (headerParts.size >= 4) {
-                headerParts[3].toLongOrNull() ?: 0L
-            } else existingBytes
+            // Format 1 (new): OK <totalSize> <alignedOffset> <encodedName>
+            // Format 2 (legacy): OK <totalSize> <name> <alignedOffset>
+            val alignedStartOffset = when {
+                headerParts.size >= 4 && headerParts[2].toLongOrNull() != null -> headerParts[2].toLong()
+                headerParts.size >= 4 && headerParts.last().toLongOrNull() != null -> headerParts.last().toLong()
+                else -> existingBytes
+            }
             val bytesToSkipInitially = (existingBytes - alignedStartOffset).coerceAtLeast(0L)
 
             // Open part file in append mode if resuming from a previous partial download
-            val appendMode = alignedStartOffset > 0 && partFile.exists() && partFile.length() == alignedStartOffset
+            val appendMode = alignedStartOffset > 0 && partFile.exists() && partFile.length() >= alignedStartOffset
+            if (appendMode && partFile.length() > alignedStartOffset) {
+                try {
+                    java.io.RandomAccessFile(partFile, "rw").use { it.setLength(alignedStartOffset) }
+                } catch (_: Exception) {}
+            }
             var bytesWritten = 0L
             FileOutputStream(partFile, appendMode).use { fileOut ->
                 var bytesToSkip = bytesToSkipInitially
@@ -463,25 +642,37 @@ class FileTransferEngine(private val context: Context) {
             }
 
             // When completely downloaded, rename from .part to final destination in LocalConnect directory
+            var finalDownloadedFile = destinationFile
             if (partFile.exists()) {
-                if (destinationFile.exists()) {
-                    destinationFile.delete()
+                // Sniff the downloaded part file to ensure correct extension!
+                val (detectedMime, detectedExt) = detectMimeAndExtension(partFile, mimeType)
+                var resolvedName = safeFileName
+                if (!resolvedName.contains('.') || resolvedName.endsWith(".bin", ignoreCase = true)) {
+                    resolvedName = ensureFileExtension(resolvedName, detectedMime)
                 }
-                val moved = partFile.renameTo(destinationFile)
+                if (!resolvedName.contains('.')) {
+                    resolvedName = "$resolvedName.$detectedExt"
+                }
+                finalDownloadedFile = File(categoryDir, resolvedName)
+
+                if (finalDownloadedFile.exists()) {
+                    finalDownloadedFile.delete()
+                }
+                val moved = partFile.renameTo(finalDownloadedFile)
                 if (!moved) {
-                    partFile.copyTo(destinationFile, overwrite = true)
+                    partFile.copyTo(finalDownloadedFile, overwrite = true)
                     partFile.delete()
                 }
             }
 
             // Register the file with the system media index (MediaStore on Android 10+)
-            val mime = getMimeTypeFromFileName(destinationFile.name)
-            StorageUtils.registerDownloadedFile(context, destinationFile, mime)
+            val (fileMime, _) = detectMimeAndExtension(finalDownloadedFile, mimeType)
+            StorageUtils.registerDownloadedFile(context, finalDownloadedFile, fileMime)
 
             _downloadProgressMap.value = _downloadProgressMap.value + (messageId to 1.0f)
-            Log.d(TAG, "Downloaded encrypted file successfully: ${destinationFile.absolutePath} ($bytesWritten bytes)")
+            Log.d(TAG, "Downloaded encrypted file successfully: ${finalDownloadedFile.absolutePath} ($bytesWritten bytes, mime=$fileMime)")
 
-            destinationFile
+            finalDownloadedFile
         } catch (e: Exception) {
             Log.d(TAG, "Download paused or cancelled for $messageId: ${e.message}")
             // Retain the partial progress so the user sees "استئناف التحميل (X%)"
@@ -505,10 +696,19 @@ class FileTransferEngine(private val context: Context) {
         }
     }
 
-    /** Heuristic image-name check used to force the image MIME family on open. */
-    private fun isImageFile(fileName: String): Boolean {
+    fun isImageFile(fileName: String): Boolean {
         val ext = fileName.substringAfterLast('.', "").lowercase()
-        return ext in listOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif")
+        return ext in listOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif", "svg")
+    }
+
+    fun isVideoFile(fileName: String): Boolean {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext in listOf("mp4", "mkv", "avi", "mov", "webm", "3gp", "flv", "m4v", "ts")
+    }
+
+    fun isAudioFile(fileName: String): Boolean {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext in listOf("mp3", "m4a", "wav", "ogg", "aac", "flac", "opus", "amr")
     }
 
     /**
@@ -528,15 +728,14 @@ class FileTransferEngine(private val context: Context) {
                 file
             )
 
-            // Resolve from the actual file name when the stored MIME is missing or
-            // generic; extensionless images are forced to image/* so Android offers
-            // a gallery/photo viewer instead of an archive (zip) app.
-            val storedMime = mimeType
-            val fileNameMime = getMimeTypeFromFileName(file.name)
+            val (detectedMime, _) = detectMimeAndExtension(file, mimeType)
             val resolvedMimeType = when {
-                !storedMime.isNullOrBlank() && storedMime != "*/*" -> storedMime
-                fileNameMime != "*/*" -> fileNameMime
+                detectedMime != "*/*" && detectedMime != "application/octet-stream" -> detectedMime
+                !mimeType.isNullOrBlank() && mimeType != "*/*" && mimeType != "application/octet-stream" -> mimeType
                 isImageFile(file.name) -> "image/*"
+                isVideoFile(file.name) -> "video/*"
+                isAudioFile(file.name) -> "audio/*"
+                file.name.endsWith(".pdf", ignoreCase = true) -> "application/pdf"
                 else -> "*/*"
             }
 
@@ -546,24 +745,27 @@ class FileTransferEngine(private val context: Context) {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
 
-            context.startActivity(Intent.createChooser(intent, "فتح الملف باستخدام").apply {
+            val chooser = Intent.createChooser(intent, "فتح الملف باستخدام").apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            })
+            }
+            context.startActivity(chooser)
         } catch (e: Exception) {
-            Log.w(TAG, "Could not open with specific MIME type, trying generic */*", e)
+            Log.w(TAG, "Could not open with ACTION_VIEW, falling back to Share Intent", e)
             try {
                 val file = File(filePath)
                 val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                val genericIntent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "*/*")
+                val (detectedMime, _) = detectMimeAndExtension(file, mimeType)
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = if (detectedMime != "*/*") detectedMime else "application/octet-stream"
+                    putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                context.startActivity(Intent.createChooser(genericIntent, "فتح الملف").apply {
+                context.startActivity(Intent.createChooser(shareIntent, "مشاركة / فتح الملف").apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 })
             } catch (ex: Exception) {
-                Log.e(TAG, "Failed to open file", ex)
+                Log.e(TAG, "Failed to open or share file", ex)
             }
         }
     }

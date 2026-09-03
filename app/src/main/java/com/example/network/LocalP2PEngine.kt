@@ -1588,7 +1588,8 @@ class LocalP2PEngine(private val context: Context) {
                     val fileSize = json.optLong("fileSize", 0L)
                     val mimeType = if (json.has("mimeType")) json.optString("mimeType") else null
                     val durationSeconds = json.optInt("durationSeconds", 0)
-                    val msgSenderIp = json.optString("senderIp", senderIp)
+                    val rawSenderIp = if (json.has("senderIp")) json.optString("senderIp") else null
+                    val msgSenderIp = if (!rawSenderIp.isNullOrBlank() && rawSenderIp != "127.0.0.1") rawSenderIp else senderIp
 
                     val chatMessage = ChatMessage(
                         id = json.optString("id", UUID.randomUUID().toString()),
@@ -1601,9 +1602,12 @@ class LocalP2PEngine(private val context: Context) {
                         timestamp = json.optLong("timestamp", System.currentTimeMillis()),
                         isMine = false,
                         messageType = try {
-                            MessageType.valueOf(json.optString("msgType", MessageType.TEXT.name))
+                            val parsed = MessageType.valueOf(json.optString("msgType", MessageType.TEXT.name))
+                            if (parsed == MessageType.FILE && mimeType?.startsWith("image/") == true) MessageType.IMAGE else parsed
                         } catch (e: Exception) {
-                            if (fileId != null) MessageType.FILE else MessageType.TEXT
+                            if (mimeType?.startsWith("image/") == true) MessageType.IMAGE
+                            else if (fileId != null) MessageType.FILE
+                            else MessageType.TEXT
                         },
                         imageBase64 = if (json.has("image")) json.optString("image") else null,
                         fileId = fileId,
