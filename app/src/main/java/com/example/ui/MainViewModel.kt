@@ -157,6 +157,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val callWaitingInvite = engine.callWaitingInvite
     val callEndedReason = engine.callEndedReason
     val activeGroupCall = engine.activeGroupCall
+    val roomActiveGroupCalls = engine.roomActiveGroupCalls
     val incomingGroupCallInvite = engine.incomingGroupCallInvite
     val callSignalInfo = engine.callSignalInfo
     val micLevel = engine.audioEngine.micLevel

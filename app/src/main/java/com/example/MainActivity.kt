@@ -328,6 +328,7 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
     val typingPeers by viewModel.typingPeers.collectAsState()
     val activeRoomInvitation by viewModel.activeRoomInvitation.collectAsState()
     val isHotspotDataWarning by viewModel.isHotspotDataWarning.collectAsState()
+    val roomActiveGroupCalls by viewModel.roomActiveGroupCalls.collectAsState()
     var incomingGroupCallInvite by remember { mutableStateOf<com.example.model.GroupCallInvitation?>(null) }
 
     LaunchedEffect(Unit) {
@@ -722,7 +723,9 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         onSelectRoom = { roomId -> viewModel.joinRoom(roomId) },
                         onCreateRoomClick = { showAddRoomDialog = true },
                         onInvitePeersClick = { room -> roomToInvite = room },
+                        roomActiveGroupCalls = roomActiveGroupCalls,
                         onStartGroupVideoCall = { roomId, roomName -> viewModel.startGroupVideoCall(roomId, roomName) },
+                        onJoinGroupVideoCall = { invite -> viewModel.joinGroupVideoCall(invite) },
                         onToggleGroupVoiceCall = { viewModel.toggleGroupVoiceCall() },
                         onToggleOpenMic = { viewModel.toggleOpenMic() },
                         onPushToTalkChange = { pressed -> viewModel.setPushToTalk(pressed) },

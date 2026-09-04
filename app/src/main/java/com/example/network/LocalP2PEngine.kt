@@ -114,6 +114,9 @@ class LocalP2PEngine(private val context: Context) {
     private val _activeGroupCall = MutableStateFlow<ActiveGroupCall?>(null)
     val activeGroupCall = _activeGroupCall.asStateFlow()
 
+    private val _roomActiveGroupCalls = MutableStateFlow<Map<String, GroupCallInvitation>>(emptyMap())
+    val roomActiveGroupCalls = _roomActiveGroupCalls.asStateFlow()
+
     private val _incomingGroupCallInvite = MutableSharedFlow<GroupCallInvitation>(extraBufferCapacity = 16)
     val incomingGroupCallInvite = _incomingGroupCallInvite.asSharedFlow()
 
@@ -722,6 +725,13 @@ class LocalP2PEngine(private val context: Context) {
                     put("isVideoActive", videoEngine.isVideoStreaming.value)
                     put("isMuted", audioEngine.isMuted.value)
                     put("device", "${Build.MANUFACTURER} ${Build.MODEL}")
+                    val grp = _activeGroupCall.value
+                    if (grp != null) {
+                        put("groupCallId", grp.callId)
+                        put("groupCallRoomId", grp.roomId)
+                        put("groupCallRoomName", grp.roomName)
+                        put("groupCallInitiator", grp.initiatorName)
+                    }
                 }
                 sendJsonPacket(json)
             } catch (e: Exception) {
@@ -1163,11 +1173,14 @@ class LocalP2PEngine(private val context: Context) {
         }
     }
 
+    private var lastPeerPongTimestamp = 0L
+
     /**
      * Starts continuous low-overhead ping-pong RTT latency and signal strength telemetry during calls.
      */
     private fun startCallQualityMonitor(callId: String, peerIp: String, isVideo: Boolean) {
         callQualityJob?.cancel()
+        lastPeerPongTimestamp = System.currentTimeMillis()
         val initialInfo = PeerSignalInfo(
             peerId = _activeCall.value?.peer?.id ?: "",
             latencyMs = 12L,
@@ -1183,6 +1196,12 @@ class LocalP2PEngine(private val context: Context) {
 
         callQualityJob = scope.launch {
             while (isActive) {
+                // Auto-cleanup stale call if peer becomes completely unreachable for > 12 seconds
+                if (lastPeerPongTimestamp > 0 && System.currentTimeMillis() - lastPeerPongTimestamp > 12000L) {
+                    Log.w(TAG, "Call partner in $callId unreachable (>12s) — auto releasing call session.")
+                    endCall()
+                    break
+                }
                 try {
                     val pingJson = JSONObject().apply {
                         put("type", "CALL_PING")
@@ -1203,11 +1222,13 @@ class LocalP2PEngine(private val context: Context) {
     private fun stopCallQualityMonitor() {
         callQualityJob?.cancel()
         callQualityJob = null
+        lastPeerPongTimestamp = 0L
         _callSignalInfo.value = null
     }
 
     private fun handleCallPong(callId: String, sentTimestamp: Long, isVideo: Boolean) {
         val now = System.currentTimeMillis()
+        lastPeerPongTimestamp = now
         val rawRtt = (now - sentTimestamp).coerceIn(1L, 9999L)
 
         // Exponential moving average for smooth display
@@ -1308,15 +1329,29 @@ class LocalP2PEngine(private val context: Context) {
             val json = JSONObject().apply {
                 put("type", "CALL_END")
                 put("callId", currentCall.callId)
+                put("senderId", _userProfile.value.id)
             }
-            sendJsonToIp(json, currentCall.peer.ip)
+            // Send 3 times across UDP to prevent packet drop
+            repeat(3) {
+                sendJsonToIp(json, currentCall.peer.ip)
+                delay(40L)
+            }
         }
     }
 
     /**
-     * Starts a room-wide Group Video & Audio Call (initiator explicitly launched it).
+     * Starts a room-wide Group Video & Audio Call (initiator explicitly launched it),
+     * or seamlessly rejoins if a group call is already in progress in this room!
      */
     fun startGroupVideoCall(roomId: String, roomName: String) {
+        // If an ongoing group call already exists in this room, join it instead of creating a conflicting new call!
+        val existingCall = _roomActiveGroupCalls.value[roomId]
+        if (existingCall != null) {
+            Log.i(TAG, "Rejoining existing active group call ${existingCall.callId} in room $roomId")
+            joinGroupVideoCall(existingCall)
+            return
+        }
+
         val callId = UUID.randomUUID().toString()
         val roomPeers = peersMap.values.filter { it.currentRoom == roomId && it.id != _userProfile.value.id }
 
@@ -1336,6 +1371,17 @@ class LocalP2PEngine(private val context: Context) {
             isSpeakerOn = audioEngine.isSpeakerOn.value,
             startTime = System.currentTimeMillis()
         )
+
+        val invite = GroupCallInvitation(
+            callId = callId,
+            roomId = roomId,
+            roomName = roomName,
+            initiatorId = _userProfile.value.id,
+            initiatorName = _userProfile.value.displayName.ifBlank { _userProfile.value.username },
+            initiatorColor = _userProfile.value.avatarColor,
+            initiatorAvatarBase64 = _userProfile.value.avatarBase64
+        )
+        _roomActiveGroupCalls.value = _roomActiveGroupCalls.value + (roomId to invite)
 
         updateRoomAudioTargets(roomId)
 
@@ -1377,6 +1423,7 @@ class LocalP2PEngine(private val context: Context) {
         callToneManager.stopAll()
         callToneManager.playConnectedChime()
 
+        _roomActiveGroupCalls.value = _roomActiveGroupCalls.value + (invitation.roomId to invitation)
         setRoom(invitation.roomId)
         val roomPeers = peersMap.values.filter { it.currentRoom == invitation.roomId && it.id != _userProfile.value.id }
 
@@ -1445,10 +1492,18 @@ class LocalP2PEngine(private val context: Context) {
                     put("roomId", currentGroupCall.roomId)
                     put("peerId", _userProfile.value.id)
                 }
-                sendJsonPacket(json)
+                repeat(3) {
+                    sendJsonPacket(json)
+                    delay(40L)
+                }
             } catch (e: Exception) {
                 // Ignore
             }
+        }
+
+        // If no other participants were in the call with us, clear the room call tracking
+        if (currentGroupCall.participants.isEmpty()) {
+            _roomActiveGroupCalls.value = _roomActiveGroupCalls.value - currentGroupCall.roomId
         }
 
         // Resume the room voice session if it was suspended when the group call started
@@ -1540,6 +1595,22 @@ class LocalP2PEngine(private val context: Context) {
             when (type) {
                 "PING" -> {
                     parseAndStorePeer(json, senderIp)
+
+                    val gCallId = json.optString("groupCallId")
+                    val gRoomId = json.optString("groupCallRoomId")
+                    if (gCallId.isNotEmpty() && gRoomId.isNotEmpty()) {
+                        val existing = _roomActiveGroupCalls.value[gRoomId]
+                        if (existing == null || existing.callId != gCallId) {
+                            val invite = GroupCallInvitation(
+                                callId = gCallId,
+                                roomId = gRoomId,
+                                roomName = json.optString("groupCallRoomName", "غرفة"),
+                                initiatorId = json.optString("id"),
+                                initiatorName = json.optString("groupCallInitiator", json.optString("name", "مستخدم"))
+                            )
+                            _roomActiveGroupCalls.value = _roomActiveGroupCalls.value + (gRoomId to invite)
+                        }
+                    }
 
                     // If sender probed during subnet sweep, immediately reply so scanner discovers this device
                     if (json.optBoolean("isScanProbe", false)) {
@@ -1721,10 +1792,23 @@ class LocalP2PEngine(private val context: Context) {
                         isFrontCamera = videoEngine.isFrontCamera.value
                     )
 
-                    // Busy-state protection: NEVER clobber an active call with a new invite
-                    val currentCall = _activeCall.value
+                    // Reconnection protection: If the caller is the same peer we had an active/stale call with,
+                    // clean up the dead session immediately so they can call back and reconnect without getting CALL_BUSY!
+                    var currentCall = _activeCall.value
+                    if (currentCall != null && currentCall.peer.id == callerId) {
+                        Log.i(TAG, "Peer $callerId is calling back. Releasing previous call session.")
+                        _activeCall.value = null
+                        stopCallQualityMonitor()
+                        audioEngine.revokeSession()
+                        audioEngine.stopAudioRecording()
+                        videoEngine.stopCameraStream()
+                        audioEngine.removeTarget(currentCall.peer.id)
+                        videoEngine.removeTarget(currentCall.peer.id)
+                        currentCall = null
+                    }
+
                     when {
-                        // In a live call -> offer call waiting (keep the current call intact)
+                        // In a live call with someone else -> offer call waiting
                         currentCall != null && currentCall.state == CallState.CONNECTED -> {
                             _callWaitingInvite.value = incomingCall
                             callToneManager.playIncomingRingtone()
@@ -1812,8 +1896,9 @@ class LocalP2PEngine(private val context: Context) {
 
                 "CALL_END" -> {
                     val callId = json.optString("callId")
+                    val senderId = json.optString("senderId")
                     val currentCall = _activeCall.value
-                    if (currentCall != null && currentCall.callId == callId) {
+                    if (currentCall != null && (currentCall.callId == callId || currentCall.peer.id == senderId || senderId.isEmpty())) {
                         _activeCall.value = null
                         stopCallQualityMonitor()
 
@@ -1823,15 +1908,18 @@ class LocalP2PEngine(private val context: Context) {
                         _callWaitingInvite.value = null
                         callToneManager.stopAll()
                         callToneManager.playDisconnectedTone()
+                        LocalNotificationManager.cancelCallNotification(context)
 
                         audioEngine.revokeSession()
                         audioEngine.stopAudioRecording()
                         videoEngine.stopCameraStream()
+                        audioEngine.removeTarget(currentCall.peer.id)
+                        videoEngine.removeTarget(currentCall.peer.id)
                         resumeRoomVoiceAfterCall()
                     } else {
                         // The waiting invite's caller may have hung up
                         val waiting = _callWaitingInvite.value
-                        if (waiting != null && waiting.callId == callId) {
+                        if (waiting != null && (waiting.callId == callId || waiting.peer.id == senderId)) {
                             declineWaitingCall(reason = "أنهى المتصل المحاولة")
                         }
                     }
@@ -1936,6 +2024,7 @@ class LocalP2PEngine(private val context: Context) {
                         initiatorAvatarBase64 = initiatorAvatarBase64,
                         timestamp = timestamp
                     )
+                    _roomActiveGroupCalls.value = _roomActiveGroupCalls.value + (roomId to invite)
 
                     // RULE 1: invitation only — no audio channel is opened here.
                     // RULE 3: incoming ringtone + haptics, auto-stopped after 45s.
@@ -1980,11 +2069,16 @@ class LocalP2PEngine(private val context: Context) {
 
                 "GROUP_CALL_LEAVE" -> {
                     val peerId = json.optString("peerId")
+                    val roomId = json.optString("roomId")
                     if (peerId == _userProfile.value.id) return
                     val cur = _activeGroupCall.value
                     if (cur != null) {
                         val updatedList = cur.participants.filter { it.id != peerId }
                         _activeGroupCall.value = cur.copy(participants = updatedList)
+                        updateRoomAudioTargets(cur.roomId)
+                        if (updatedList.isEmpty() && cur.initiatorId == peerId) {
+                            _roomActiveGroupCalls.value = _roomActiveGroupCalls.value - cur.roomId
+                        }
                     }
                 }
 

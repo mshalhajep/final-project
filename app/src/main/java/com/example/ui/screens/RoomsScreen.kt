@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -156,7 +157,9 @@ fun RoomsScreen(
     onSelectRoom: (String) -> Unit,
     onCreateRoomClick: () -> Unit,
     onInvitePeersClick: (RoomInfo) -> Unit,
+    roomActiveGroupCalls: Map<String, com.example.model.GroupCallInvitation> = emptyMap(),
     onStartGroupVideoCall: (roomId: String, roomName: String) -> Unit = { _, _ -> },
+    onJoinGroupVideoCall: (com.example.model.GroupCallInvitation) -> Unit = {},
     onToggleGroupVoiceCall: () -> Unit = {},
     onToggleOpenMic: () -> Unit = {},
     onPushToTalkChange: (Boolean) -> Unit = {},
@@ -478,14 +481,23 @@ fun RoomsScreen(
                         }
 
                         if (currentRoomInfo != null) {
-                            // Group Video Call Button
+                            val activeCallInThisRoom = roomActiveGroupCalls[currentRoomInfo.id]
+                            val isCallActiveHere = activeCallInThisRoom != null
+
+                            // Group Video Call Button (Start or Rejoin!)
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = StatusGreen,
+                                color = if (isCallActiveHere) AccentRose else StatusGreen,
                                 shadowElevation = 2.dp,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(12.dp))
-                                    .clickable { onStartGroupVideoCall(currentRoomInfo.id, currentRoomInfo.name) }
+                                    .clickable {
+                                        if (activeCallInThisRoom != null) {
+                                            onJoinGroupVideoCall(activeCallInThisRoom)
+                                        } else {
+                                            onStartGroupVideoCall(currentRoomInfo.id, currentRoomInfo.name)
+                                        }
+                                    }
                                     .testTag("group_video_call_button")
                             ) {
                                 Row(
@@ -500,7 +512,7 @@ fun RoomsScreen(
                                     )
                                     Spacer(modifier = Modifier.width(5.dp))
                                     Text(
-                                        text = "فيديو جماعي",
+                                        text = if (isCallActiveHere) "انضمام للمكالمة" else "فيديو جماعي",
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White
@@ -705,6 +717,70 @@ fun RoomsScreen(
                 .weight(1f)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
+                val activeCallInThisRoom = currentRoomInfo?.let { roomActiveGroupCalls[it.id] }
+                AnimatedVisibility(
+                    visible = activeCallInThisRoom != null,
+                    enter = androidx.compose.animation.expandVertically() + fadeIn(),
+                    exit = androidx.compose.animation.shrinkVertically() + fadeOut()
+                ) {
+                    if (activeCallInThisRoom != null) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = StatusGreen.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, StatusGreen.copy(alpha = 0.6f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .clickable { onJoinGroupVideoCall(activeCallInThisRoom) }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(CircleShape)
+                                        .background(StatusGreen),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Videocam,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "مكالمة فيديو جارية الآن في الغرفة",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "بدأها ${activeCallInThisRoom.initiatorName} • انقر للانضمام أو العودة",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = StatusGreen
+                                    )
+                                }
+                                androidx.compose.material3.FilledTonalButton(
+                                    onClick = { onJoinGroupVideoCall(activeCallInThisRoom) },
+                                    colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = StatusGreen,
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                ) {
+                                    Text("انضمام", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (inRoomMessages.isEmpty()) {
                     Box(
                         modifier = Modifier
