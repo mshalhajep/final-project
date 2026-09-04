@@ -229,8 +229,13 @@ fun AuthScreen(
                 // Username field
                 OutlinedTextField(
                     value = username,
-                    onValueChange = {
-                        username = it.replace(Regex("[^a-zA-Z0-9_\\u0600-\\u06FF ]"), "").take(30).replace(" ", "")
+                    onValueChange = { newText ->
+                        val filtered = newText.filter { c ->
+                            c != ' ' && (c.isLetterOrDigit() || c == '_' || c in '\u0600'..'\u06FF')
+                        }.take(30)
+                        if (filtered != username) {
+                            username = filtered
+                        }
                         onClearError()
                     },
                     label = { Text("اسم المستخدم الفريد (Username)") },

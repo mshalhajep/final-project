@@ -3,6 +3,7 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -144,7 +145,6 @@ fun ImageViewerDialog(
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxSize()
-                        .clickable(onClick = onDismiss)
                         .graphicsLayer {
                             scaleX = scale
                             scaleY = scale
@@ -152,9 +152,27 @@ fun ImageViewerDialog(
                             translationY = offset.y
                         }
                         .pointerInput(Unit) {
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                },
+                                onTap = { onDismiss() }
+                            )
+                        }
+                        .pointerInput(Unit) {
                             detectTransformGestures { _, pan, zoom, _ ->
                                 scale = (scale * zoom).coerceIn(1f, 6f)
-                                offset = if (scale > 1f) offset + pan else Offset.Zero
+                                if (scale > 1f) {
+                                    val maxOffsetX = (size.width * (scale - 1f)) / 2f
+                                    val maxOffsetY = (size.height * (scale - 1f)) / 2f
+                                    offset = Offset(
+                                        x = (offset.x + pan.x).coerceIn(-maxOffsetX, maxOffsetX),
+                                        y = (offset.y + pan.y).coerceIn(-maxOffsetY, maxOffsetY)
+                                    )
+                                } else {
+                                    offset = Offset.Zero
+                                }
                             }
                         }
                 )

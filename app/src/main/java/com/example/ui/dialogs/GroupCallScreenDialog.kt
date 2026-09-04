@@ -131,68 +131,65 @@ fun GroupCallScreenDialog(
     onStartScreenShare: (String) -> Unit,
     onStopScreenShare: () -> Unit,
     onMinimize: () -> Unit = {},
+    isInPipMode: Boolean = false,
     reactions: List<CallReactionEvent> = emptyList(),
     onSendReaction: (String) -> Unit = {}
 ) {
-    var callDurationSeconds by remember { mutableStateOf(0L) }
     var showMoreOptionsSheet by remember { mutableStateOf(false) }
 
-    // Real-time duration timer
-    LaunchedEffect(activeGroupCall.startTime) {
-        while (true) {
-            val elapsed = (System.currentTimeMillis() - activeGroupCall.startTime) / 1000
-            callDurationSeconds = elapsed.coerceAtLeast(0L)
-            delay(1000)
-        }
-    }
+    androidx.activity.compose.BackHandler(enabled = true) { onMinimize() }
 
-    Dialog(
-        onDismissRequest = onMinimize,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false
-        )
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = DarkBackground
     ) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = DarkBackground
-        ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .navigationBarsPadding()
-                ) {
-                    // --- Top Header Bar ---
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (!isInPipMode) {
+                            Modifier
+                                .statusBarsPadding()
+                                .navigationBarsPadding()
+                        } else Modifier
+                    )
+            ) {
+                // --- Top Header Bar ---
+                if (!isInPipMode) {
                     GroupCallHeader(
                         roomName = activeGroupCall.roomName,
-                        durationSeconds = callDurationSeconds,
+                        startTime = activeGroupCall.startTime,
                         participantCount = activeGroupCall.participants.size + 1,
                         isScreenSharing = activeGroupCall.isScreenSharing,
                         sharedAppName = activeGroupCall.screenSharedAppName,
                         onMinimize = onMinimize
                     )
+                }
 
-                    // --- Dynamic Multi-User Video Grid (Responsive Animated Grid Layout Manager) ---
-                    Box(
-                        modifier = Modifier
+                // --- Dynamic Multi-User Video Grid (Responsive Animated Grid Layout Manager) ---
+                Box(
+                    modifier = if (isInPipMode) {
+                        Modifier.fillMaxSize()
+                    } else {
+                        Modifier
                             .fillMaxWidth()
                             .weight(1f)
                             .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        GroupCallGridLayoutManager(
-                            activeGroupCall = activeGroupCall,
-                            userProfile = userProfile,
-                            videoEngine = videoEngine,
-                            remoteVideoFrames = remoteVideoFrames,
-                            micLevel = micLevel,
-                            isMuted = isMuted
-                        )
                     }
+                ) {
+                    GroupCallGridLayoutManager(
+                        activeGroupCall = activeGroupCall,
+                        userProfile = userProfile,
+                        videoEngine = videoEngine,
+                        remoteVideoFrames = remoteVideoFrames,
+                        micLevel = micLevel,
+                        isMuted = isMuted
+                    )
+                }
 
-                    // --- Bottom Floating Control Dock: 4 controls + End Call ---
+                // --- Bottom Floating Control Dock: 4 controls + End Call ---
+                if (!isInPipMode) {
                     GroupCallControlDock(
                         isMicMuted = isMuted,
                         isCameraOff = activeGroupCall.isCameraOff,
@@ -205,7 +202,9 @@ fun GroupCallScreenDialog(
                         onSendReaction = onSendReaction
                     )
                 }
+            }
 
+            if (!isInPipMode) {
                 // Floating emoji reactions layer (rises above the control dock)
                 val floatingReactions = rememberFloatingReactions(reactions)
                 CallReactionOverlay(floatingReactions, modifier = Modifier.matchParentSize())
@@ -236,13 +235,39 @@ fun GroupCallScreenDialog(
     }
 }
 
+@Composable
+private fun GroupCallDurationPill(startTime: Long) {
+    var durationSeconds by remember(startTime) { mutableStateOf(0L) }
+    LaunchedEffect(startTime) {
+        while (true) {
+            val elapsed = (System.currentTimeMillis() - startTime) / 1000
+            durationSeconds = elapsed.coerceAtLeast(0L)
+            delay(1000)
+        }
+    }
+    val minutes = durationSeconds / 60
+    val seconds = durationSeconds % 60
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Black.copy(alpha = 0.4f)
+    ) {
+        Text(
+            text = String.format("%02d:%02d", minutes, seconds),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+        )
+    }
+}
+
 /**
  * Top Header of the Group Video Call with Room info, timer, and member badge.
  */
 @Composable
 private fun GroupCallHeader(
     roomName: String,
-    durationSeconds: Long,
+    startTime: Long = 0L,
     participantCount: Int,
     isScreenSharing: Boolean,
     sharedAppName: String?,
@@ -356,20 +381,7 @@ private fun GroupCallHeader(
                 }
 
                 // Duration
-                val minutes = durationSeconds / 60
-                val seconds = durationSeconds % 60
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color.Black.copy(alpha = 0.4f)
-                ) {
-                    Text(
-                        text = String.format("%02d:%02d", minutes, seconds),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
+                GroupCallDurationPill(startTime = startTime)
 
                 Spacer(modifier = Modifier.width(6.dp))
 

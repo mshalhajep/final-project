@@ -131,81 +131,66 @@ fun CallScreenDialog(
     onStartScreenShare: (String) -> Unit = {},
     onStopScreenShare: () -> Unit = {},
     onMinimize: () -> Unit = {},
+    isInPipMode: Boolean = false,
     reactions: List<CallReactionEvent> = emptyList(),
     onSendReaction: (String) -> Unit = {}
 ) {
-    var callSeconds by remember { mutableStateOf(0) }
     var showMoreOptionsSheet by remember { mutableStateOf(false) }
 
-    LaunchedEffect(activeCall.state) {
-        if (activeCall.state == CallState.CONNECTED) {
-            callSeconds = 0
-            while (true) {
-                delay(1000)
-                callSeconds++
+    androidx.activity.compose.BackHandler(enabled = true) { onMinimize() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DarkBackground)
+    ) {
+        when (activeCall.state) {
+            CallState.OUTGOING_RINGING -> {
+                OutgoingCallView(
+                    activeCall = activeCall,
+                    onCancel = onEnd
+                )
+            }
+
+            CallState.INCOMING_RINGING -> {
+                IncomingCallView(
+                    activeCall = activeCall,
+                    onAccept = onAccept,
+                    onDecline = onDecline
+                )
+            }
+
+            CallState.CONNECTED -> {
+                ConnectedCallView(
+                    activeCall = activeCall,
+                    videoEngine = videoEngine,
+                    remoteVideoFrames = remoteVideoFrames,
+                    micLevel = micLevel,
+                    isMuted = isMuted,
+                    isSpeakerOn = isSpeakerOn,
+                    callVolume = callVolume,
+                    signalInfo = signalInfo,
+                    isInPipMode = isInPipMode,
+                    onEnd = onEnd,
+                    onToggleMute = onToggleMute,
+                    onToggleSpeaker = onToggleSpeaker,
+                    onToggleCameraLens = onToggleCameraLens,
+                    onToggleCameraOff = onToggleCameraOff,
+                    onSetVolume = onSetVolume,
+                    onStartScreenShare = onStartScreenShare,
+                    onStopScreenShare = onStopScreenShare,
+                    onMinimize = onMinimize,
+                    onOpenMoreOptions = { showMoreOptionsSheet = true },
+                    onSendReaction = onSendReaction
+                )
+            }
+
+            CallState.ENDED, CallState.IDLE -> {
+                // Closed
             }
         }
-    }
 
-    val minutes = callSeconds / 60
-    val seconds = callSeconds % 60
-    val durationText = "\u200E${String.format("%02d:%02d", minutes, seconds)}"
-
-    Dialog(
-        onDismissRequest = onMinimize,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(DarkBackground)
-        ) {
-            when (activeCall.state) {
-                CallState.OUTGOING_RINGING -> {
-                    OutgoingCallView(
-                        activeCall = activeCall,
-                        onCancel = onEnd
-                    )
-                }
-
-                CallState.INCOMING_RINGING -> {
-                    IncomingCallView(
-                        activeCall = activeCall,
-                        onAccept = onAccept,
-                        onDecline = onDecline
-                    )
-                }
-
-                CallState.CONNECTED -> {
-                    ConnectedCallView(
-                        activeCall = activeCall,
-                        durationText = durationText,
-                        videoEngine = videoEngine,
-                        remoteVideoFrames = remoteVideoFrames,
-                        micLevel = micLevel,
-                        isMuted = isMuted,
-                        isSpeakerOn = isSpeakerOn,
-                        callVolume = callVolume,
-                        signalInfo = signalInfo,
-                        onEnd = onEnd,
-                        onToggleMute = onToggleMute,
-                        onToggleSpeaker = onToggleSpeaker,
-                        onToggleCameraLens = onToggleCameraLens,
-                        onToggleCameraOff = onToggleCameraOff,
-                        onSetVolume = onSetVolume,
-                        onStartScreenShare = onStartScreenShare,
-                        onStopScreenShare = onStopScreenShare,
-                        onMinimize = onMinimize,
-                        onOpenMoreOptions = { showMoreOptionsSheet = true },
-                        onSendReaction = onSendReaction
-                    )
-                }
-
-                CallState.ENDED, CallState.IDLE -> {
-                    // Closed
-                }
-            }
-
+        if (!isInPipMode) {
             // Floating emoji reactions layer (rises above the control dock)
             val floatingReactions = rememberFloatingReactions(reactions)
             CallReactionOverlay(floatingReactions)
@@ -589,9 +574,34 @@ private fun IncomingCallView(
 }
 
 @Composable
+fun CallDurationTimerText(
+    modifier: Modifier = Modifier,
+    style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.bodyMedium,
+    fontWeight: FontWeight? = null,
+    color: Color = PrimaryCyan
+) {
+    var callSeconds by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        callSeconds = 0
+        while (true) {
+            delay(1000)
+            callSeconds++
+        }
+    }
+    val minutes = callSeconds / 60
+    val seconds = callSeconds % 60
+    Text(
+        text = "\u200E${String.format("%02d:%02d", minutes, seconds)}",
+        style = style,
+        fontWeight = fontWeight,
+        color = color,
+        modifier = modifier
+    )
+}
+
+@Composable
 private fun ConnectedCallView(
     activeCall: ActiveCall,
-    durationText: String,
     videoEngine: VideoEngine,
     remoteVideoFrames: Map<String, PeerVideoFrame>,
     micLevel: Float,
@@ -599,6 +609,8 @@ private fun ConnectedCallView(
     isSpeakerOn: Boolean,
     callVolume: Float,
     signalInfo: PeerSignalInfo?,
+    durationText: String = "",
+    isInPipMode: Boolean = false,
     onEnd: () -> Unit,
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit,
@@ -621,7 +633,7 @@ private fun ConnectedCallView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .navigationBarsPadding()
+            .then(if (!isInPipMode) Modifier.navigationBarsPadding() else Modifier)
     ) {
         // Main view area: Fullscreen Video, Screen Share, or Audio profile
         Box(
@@ -670,8 +682,8 @@ private fun ConnectedCallView(
                     }
                 }
 
-                // Local Camera / Screen Share Preview (hidden in pure audio calls)
-                if (localScreenShareBitmap != null || activeCall.isVideo) {
+                // Local Camera / Screen Share Preview (hidden in pure audio calls and system PiP)
+                if (!isInPipMode && (localScreenShareBitmap != null || activeCall.isVideo)) {
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         border = androidx.compose.foundation.BorderStroke(
@@ -783,8 +795,7 @@ private fun ConnectedCallView(
                         color = Color.White
                     )
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = durationText,
+                    CallDurationTimerText(
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Medium,
                         color = PrimaryCyan
@@ -816,105 +827,109 @@ private fun ConnectedCallView(
             }
 
             // Tier 1 Top App Bar: encryption badge + signal quality + minimize (PiP)
-            CallTopBar(
-                peerName = activeCall.peer.name,
-                durationText = durationText,
-                signalInfo = signalInfo,
-                isRemoteMuted = isRemoteMuted,
-                onMinimize = onMinimize,
-                modifier = Modifier.align(Alignment.TopCenter)
-            )
+            if (!isInPipMode) {
+                CallTopBar(
+                    peerName = activeCall.peer.name,
+                    durationText = durationText,
+                    signalInfo = signalInfo,
+                    isRemoteMuted = isRemoteMuted,
+                    onMinimize = onMinimize,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
+            }
         }
 
         // Tier 2 Bottom Control Dock: quick reactions + exactly 4 controls + End Call
-        Surface(
-            color = Color.Black.copy(alpha = 0.95f),
-            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+        if (!isInPipMode) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.95f),
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                // Quick floating emoji reactions strip
-                CallEmojiPickerRow(
-                    onSendReaction = onSendReaction,
-                    modifier = Modifier.padding(horizontal = 18.dp)
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                // 1. Mic Toggle
-                CallDockButton(
-                    icon = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                    label = if (isMuted) "مكتوم" else "المايك",
-                    isActive = isMuted,
-                    activeColor = AccentRose,
-                    onClick = onToggleMute,
-                    testTag = "call_mute_mic_button"
-                )
+                    // Quick floating emoji reactions strip
+                    CallEmojiPickerRow(
+                        onSendReaction = onSendReaction,
+                        modifier = Modifier.padding(horizontal = 18.dp)
+                    )
 
-                // 2. Camera Toggle (video calls only)
-                if (activeCall.isVideo) {
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                    // 1. Mic Toggle
                     CallDockButton(
-                        icon = if (isCameraOff) Icons.Default.VideocamOff else Icons.Default.Videocam,
-                        label = if (isCameraOff) "تشغيل" else "فيديو",
-                        isActive = isCameraOff,
+                        icon = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                        label = if (isMuted) "مكتوم" else "المايك",
+                        isActive = isMuted,
                         activeColor = AccentRose,
-                        onClick = onToggleCameraOff,
-                        testTag = "call_toggle_camera_off_button"
+                        onClick = onToggleMute,
+                        testTag = "call_mute_mic_button"
                     )
-                }
 
-                // 3. Speaker Toggle
-                CallDockButton(
-                    icon = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.GraphicEq,
-                    label = if (isSpeakerOn) "مكبر" else "أذن",
-                    isActive = isSpeakerOn,
-                    activeColor = PrimaryCyan,
-                    onClick = onToggleSpeaker,
-                    testTag = "call_speaker_button"
-                )
+                    // 2. Camera Toggle (video calls only)
+                    if (activeCall.isVideo) {
+                        CallDockButton(
+                            icon = if (isCameraOff) Icons.Default.VideocamOff else Icons.Default.Videocam,
+                            label = if (isCameraOff) "تشغيل" else "فيديو",
+                            isActive = isCameraOff,
+                            activeColor = AccentRose,
+                            onClick = onToggleCameraOff,
+                            testTag = "call_toggle_camera_off_button"
+                        )
+                    }
 
-                // 4. More Options
-                CallDockButton(
-                    icon = Icons.Default.MoreVert,
-                    label = "المزيد",
-                    isActive = false,
-                    activeColor = PrimaryPurple,
-                    onClick = onOpenMoreOptions,
-                    testTag = "call_more_options_button"
-                )
-
-                // 5. End Call (vibrant red)
-                FloatingActionButton(
-                    onClick = onEnd,
-                    containerColor = AccentRose,
-                    contentColor = Color.White,
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .size(56.dp)
-                        .testTag("call_end_active_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CallEnd,
-                        contentDescription = "End Call",
-                        modifier = Modifier.size(26.dp)
+                    // 3. Speaker Toggle
+                    CallDockButton(
+                        icon = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.GraphicEq,
+                        label = if (isSpeakerOn) "مكبر" else "أذن",
+                        isActive = isSpeakerOn,
+                        activeColor = PrimaryCyan,
+                        onClick = onToggleSpeaker,
+                        testTag = "call_speaker_button"
                     )
-                }
+
+                    // 4. More Options
+                    CallDockButton(
+                        icon = Icons.Default.MoreVert,
+                        label = "المزيد",
+                        isActive = false,
+                        activeColor = PrimaryPurple,
+                        onClick = onOpenMoreOptions,
+                        testTag = "call_more_options_button"
+                    )
+
+                    // 5. End Call (vibrant red)
+                    FloatingActionButton(
+                        onClick = onEnd,
+                        containerColor = AccentRose,
+                        contentColor = Color.White,
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .size(56.dp)
+                            .testTag("call_end_active_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CallEnd,
+                            contentDescription = "End Call",
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
             }
         }
     }
+}
 }
 
 /** Tier 1: glass top bar with encryption badge, timer, signal quality and PiP. */
@@ -982,8 +997,7 @@ private fun CallTopBar(
                         maxLines = 1
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = durationText,
+                    CallDurationTimerText(
                         style = MaterialTheme.typography.labelMedium,
                         color = PrimaryCyan
                     )

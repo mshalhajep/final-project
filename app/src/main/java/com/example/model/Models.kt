@@ -44,7 +44,8 @@ data class RoomInfo(
     val creatorId: String = "system",
     val creatorName: String = "النظام",
     val maxCapacity: Int = 10,
-    val isPrivate: Boolean = false
+    val isPrivate: Boolean = false,
+    val passwordHash: String? = null
 )
 
 /**
@@ -58,7 +59,18 @@ data class RoomInvitation(
     val inviterName: String,
     val inviterColor: Long = 0xFF6750A4,
     val maxCapacity: Int = 10,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val isProtected: Boolean = false,
+    val passwordHash: String? = null
+)
+
+/**
+ * Model representing a blocked peer in the local blacklist.
+ */
+data class BlockedPeer(
+    val peerId: String,
+    val peerName: String,
+    val blockedAt: Long = System.currentTimeMillis()
 )
 
 /**
@@ -84,7 +96,8 @@ enum class MessageType {
     VOICE_NOTE,
     VOICE_STATUS,
     SYSTEM,
-    ROOM_INVITE
+    ROOM_INVITE,
+    MISSED_CALL
 }
 
 /**
@@ -121,7 +134,10 @@ data class ChatMessage(
     val isDownloaded: Boolean = false,
     val isRead: Boolean = true,
     val isEdited: Boolean = false,
-    val deliveryStatus: Int = DELIVERY_SENT
+    val deliveryStatus: Int = DELIVERY_SENT,
+    val replyToId: String? = null,
+    val replyToSender: String? = null,
+    val replyToText: String? = null
 )
 
 /**

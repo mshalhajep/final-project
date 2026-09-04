@@ -105,7 +105,8 @@ fun PeersScreen(
     onAudioCall: (Peer) -> Unit,
     onVideoCall: (Peer) -> Unit,
     onDirectChat: (Peer) -> Unit,
-    onManualConnectClick: () -> Unit
+    onManualConnectClick: () -> Unit,
+    unreadCounts: Map<String, Int> = emptyMap()
 ) {
     LazyColumn(
         modifier = Modifier
@@ -185,6 +186,7 @@ fun PeersScreen(
             items(peers, key = { it.id }) { peer ->
                 PeerDetailCard(
                     peer = peer,
+                    unreadCount = unreadCounts[peer.id] ?: 0,
                     onAudioCall = { onAudioCall(peer) },
                     onVideoCall = { onVideoCall(peer) },
                     onDirectChat = { onDirectChat(peer) }
@@ -682,6 +684,7 @@ private fun EmptyScanningStateCard(
 @Composable
 private fun PeerDetailCard(
     peer: Peer,
+    unreadCount: Int = 0,
     onAudioCall: () -> Unit,
     onVideoCall: () -> Unit,
     onDirectChat: () -> Unit
@@ -768,6 +771,20 @@ private fun PeerDetailCard(
                             fontWeight = FontWeight.Bold
                         )
                         UserStatusBadge(status = peer.userStatus, compact = true)
+                        if (unreadCount > 0) {
+                            Surface(
+                                color = AccentRose,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text(
+                                    text = "$unreadCount جديدة",
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                     }
 
                     if (peer.statusMessage.isNotBlank()) {
@@ -851,11 +868,27 @@ private fun PeerDetailCard(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Chat,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
+                    if (unreadCount > 0) {
+                        androidx.compose.material3.BadgedBox(
+                            badge = {
+                                androidx.compose.material3.Badge(containerColor = AccentRose) {
+                                    Text("$unreadCount")
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Chat,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Chat,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("محادثة", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }

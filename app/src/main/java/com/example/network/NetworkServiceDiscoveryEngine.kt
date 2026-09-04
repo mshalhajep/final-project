@@ -38,8 +38,7 @@ class NetworkServiceDiscoveryEngine(private val context: Context) {
     // NsdManager resolves ONE service at a time platform-wide; concurrent resolve
     // calls fail with FAILURE_ALREADY_ACTIVE. Serialize through a FIFO queue.
     private val resolveQueue = java.util.concurrent.ConcurrentLinkedQueue<NsdServiceInfo>()
-    @Volatile
-    private var isResolveInFlight = false
+    private val isResolveInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private var localServiceName = ""
 
@@ -159,14 +158,17 @@ class NetworkServiceDiscoveryEngine(private val context: Context) {
     /** Resolves queued services strictly one-by-one to avoid FAILURE_ALREADY_ACTIVE. */
     private fun drainResolveQueue() {
         if (nsdManager == null) return
-        if (isResolveInFlight) return
-        val next = resolveQueue.poll() ?: return
-        isResolveInFlight = true
+        if (!isResolveInFlight.compareAndSet(false, true)) return
+        val next = resolveQueue.poll()
+        if (next == null) {
+            isResolveInFlight.set(false)
+            return
+        }
 
         val resolveListener = object : NsdManager.ResolveListener {
             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                 Log.e(TAG, "Resolve failed for ${serviceInfo.serviceName}: Error code $errorCode")
-                isResolveInFlight = false
+                isResolveInFlight.set(false)
                 drainResolveQueue()
             }
 
@@ -174,7 +176,7 @@ class NetworkServiceDiscoveryEngine(private val context: Context) {
                 Log.d(TAG, "Service resolved: ${resolvedService.serviceName} at ${resolvedService.host?.hostAddress}:${resolvedService.port}")
                 activeResolvedServices[resolvedService.serviceName] = resolvedService
                 updatePeersList()
-                isResolveInFlight = false
+                isResolveInFlight.set(false)
                 drainResolveQueue()
             }
         }
@@ -183,7 +185,7 @@ class NetworkServiceDiscoveryEngine(private val context: Context) {
             nsdManager.resolveService(next, resolveListener)
         } catch (e: Exception) {
             Log.e(TAG, "Exception resolving NSD service", e)
-            isResolveInFlight = false
+            isResolveInFlight.set(false)
             drainResolveQueue()
         }
     }

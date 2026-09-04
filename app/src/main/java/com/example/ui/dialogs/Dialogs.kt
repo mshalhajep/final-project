@@ -34,6 +34,21 @@ import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.heightIn
+import com.example.data.local.BlockedPeerEntity
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -96,6 +111,8 @@ fun UserProfileDialog(
     currentThemeMode: ThemeMode = ThemeMode.SYSTEM,
     onThemeModeChange: (ThemeMode) -> Unit = {},
     onDismiss: () -> Unit,
+    blockedPeersCount: Int = 0,
+    onOpenBlockedPeers: () -> Unit = {},
     onSaveProfile: (displayName: String, color: Long, statusMessage: String, bio: String, userStatus: UserPresenceStatus, avatarUri: String?) -> Unit,
     onLogout: () -> Unit
 ) {
@@ -302,6 +319,25 @@ fun UserProfileDialog(
                     onThemeModeChange = onThemeModeChange
                 )
 
+                // Blocked Peers list button (S-02)
+                OutlinedButton(
+                    onClick = {
+                        onDismiss()
+                        onOpenBlockedPeers()
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Block,
+                        contentDescription = null,
+                        tint = AccentRose,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("قائمة الأجهزة المحظورة ($blockedPeersCount)")
+                }
+
                 // Logout action
                 OutlinedButton(
                     onClick = {
@@ -347,11 +383,14 @@ fun UserProfileDialog(
 @Composable
 fun AddRoomDialog(
     onDismiss: () -> Unit,
-    onCreateRoom: (name: String, description: String, capacity: Int) -> Unit
+    onCreateRoom: (name: String, description: String, capacity: Int, password: String?) -> Unit
 ) {
     var roomName by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var capacity by remember { mutableIntStateOf(8) }
+    var isPasswordProtected by remember { mutableStateOf(false) }
+    var roomPassword by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
 
     val capacityOptions = listOf(4, 8, 12, 16, 20)
 
@@ -423,17 +462,89 @@ fun AddRoomDialog(
                         )
                     }
                 }
+
+                // Password Protection Toggle (S-01)
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = if (isPasswordProtected) PrimaryPurple else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "حماية الغرفة برمز سري",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Switch(
+                            checked = isPasswordProtected,
+                            onCheckedChange = { isPasswordProtected = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = PrimaryPurple
+                            )
+                        )
+                    }
+                }
+
+                AnimatedVisibility(visible = isPasswordProtected) {
+                    OutlinedTextField(
+                        value = roomPassword,
+                        onValueChange = { roomPassword = it },
+                        label = { Text("رمز مرور الغرفة (PIN أو كلمة سر)") },
+                        placeholder = { Text("أدخل 4 خانات على الأقل") },
+                        singleLine = true,
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showPassword = !showPassword }) {
+                                Icon(
+                                    imageVector = if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         },
         confirmButton = {
+            val canSubmit = roomName.isNotBlank() && (!isPasswordProtected || roomPassword.trim().length >= 4)
             Button(
                 onClick = {
-                    if (roomName.isNotBlank()) {
-                        onCreateRoom(roomName.trim(), description.trim(), capacity)
+                    if (canSubmit) {
+                        onCreateRoom(
+                            roomName.trim(),
+                            description.trim(),
+                            capacity,
+                            if (isPasswordProtected) roomPassword.trim() else null
+                        )
                         onDismiss()
                     }
                 },
-                enabled = roomName.isNotBlank(),
+                enabled = canSubmit,
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.testTag("create_room_submit_button")
@@ -444,6 +555,190 @@ fun AddRoomDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("إلغاء")
+            }
+        }
+    )
+}
+
+/**
+ * Dialog prompting for password to join a protected room (S-01).
+ */
+@Composable
+fun EnterRoomPasswordDialog(
+    room: RoomInfo,
+    errorMessage: String? = null,
+    onDismiss: () -> Unit,
+    onJoin: (String) -> Unit
+) {
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Lock,
+                contentDescription = null,
+                tint = PrimaryPurple,
+                modifier = Modifier.size(36.dp)
+            )
+        },
+        title = {
+            Text("غرفة محمية: ${room.name}", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "هذه الغرفة خاصة وتتطلب إدخال كلمة المرور للانضمام والمراسلة.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("كلمة مرور الغرفة") },
+                    placeholder = { Text("أدخل كلمة المرور") },
+                    singleLine = true,
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Icon(
+                                imageVector = if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (password.isNotBlank()) onJoin(password)
+                        }
+                    ),
+                    isError = !errorMessage.isNullOrBlank(),
+                    supportingText = {
+                        if (!errorMessage.isNullOrBlank()) {
+                            Text(errorMessage, color = AccentRose)
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onJoin(password) },
+                enabled = password.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("انضمام")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إلغاء")
+            }
+        }
+    )
+}
+
+/**
+ * Dialog displaying and managing the blacklist of blocked peers (S-02).
+ */
+@Composable
+fun BlockedPeersDialog(
+    blockedPeers: List<BlockedPeerEntity>,
+    onDismiss: () -> Unit,
+    onUnblock: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Block,
+                contentDescription = null,
+                tint = AccentRose,
+                modifier = Modifier.size(36.dp)
+            )
+        },
+        title = {
+            Text("قائمة الأجهزة المحظورة", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            if (blockedPeers.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "لا توجد أجهزة محظورة حالياً.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(blockedPeers, key = { it.peerId }) { peer ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = peer.peerName,
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        text = "المعرف: ${peer.peerId}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = { onUnblock(peer.peerId) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("إلغاء الحظر", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("إغلاق")
             }
         }
     )

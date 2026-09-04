@@ -526,11 +526,14 @@ class FileTransferEngine(private val context: Context) {
         mimeType: String? = null
     ): File? = withContext(Dispatchers.IO) {
         var socket: Socket? = null
+        // Sanitize file name to prevent path traversal (C-04)
+        val sanitizedName = File(fileName).name
+            .replace(Regex("[^a-zA-Z0-9._\\-\\u0600-\\u06FF ]"), "_")
+            .ifBlank { "downloaded_file" }
         try {
             _downloadingIds.value = _downloadingIds.value + messageId
 
-            // Correct extensionless names so the saved file opens with the right viewer
-            val safeFileName = ensureFileExtension(fileName, mimeType)
+            val safeFileName = ensureFileExtension(sanitizedName, mimeType)
             val categoryDir = StorageUtils.getCategoryDir(context, safeFileName)
             val destinationFile = File(categoryDir, safeFileName)
 
@@ -542,7 +545,7 @@ class FileTransferEngine(private val context: Context) {
 
             // Check if there is a partial download in progress for resumption
             val tempDir = File(context.cacheDir, "p2p_downloads_temp").apply { mkdirs() }
-            val partFile = File(tempDir, "${fileId}_${fileName}.part")
+            val partFile = File(tempDir, "${fileId}_${sanitizedName}.part")
             val existingBytes = if (partFile.exists()) partFile.length() else 0L
 
             val initialProgress = if (expectedSize > 0 && existingBytes > 0) {
@@ -653,7 +656,10 @@ class FileTransferEngine(private val context: Context) {
                 if (!resolvedName.contains('.')) {
                     resolvedName = "$resolvedName.$detectedExt"
                 }
-                finalDownloadedFile = File(categoryDir, resolvedName)
+                val finalSanitized = File(resolvedName).name
+                    .replace(Regex("[^a-zA-Z0-9._\\-\\u0600-\\u06FF ]"), "_")
+                    .ifBlank { "downloaded_file" }
+                finalDownloadedFile = File(categoryDir, finalSanitized)
 
                 if (finalDownloadedFile.exists()) {
                     finalDownloadedFile.delete()
@@ -677,7 +683,7 @@ class FileTransferEngine(private val context: Context) {
             Log.d(TAG, "Download paused or cancelled for $messageId: ${e.message}")
             // Retain the partial progress so the user sees "استئناف التحميل (X%)"
             val tempDir = File(context.cacheDir, "p2p_downloads_temp")
-            val partFile = File(tempDir, "${fileId}_${fileName}.part")
+            val partFile = File(tempDir, "${fileId}_${sanitizedName}.part")
             if (partFile.exists() && expectedSize > 0) {
                 val currentProgress = (partFile.length().toFloat() / expectedSize).coerceIn(0.01f, 0.99f)
                 _downloadProgressMap.value = _downloadProgressMap.value + (messageId to currentProgress)

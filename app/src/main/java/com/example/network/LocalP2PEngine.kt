@@ -134,12 +134,36 @@ class LocalP2PEngine(private val context: Context) {
     private val _messageAcks = MutableSharedFlow<MsgAck>(extraBufferCapacity = 64)
     val messageAcks = _messageAcks.asSharedFlow()
 
+    // Real-time message edits from remote peers
+    private val _incomingMessageEdits = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 64)
+    val incomingMessageEdits = _incomingMessageEdits.asSharedFlow()
+
+    // Group call peer liveness tracking (12-second silence timeout)
+    private val lastSeenGroupParticipant = ConcurrentHashMap<String, Long>()
+    private var groupCallLivenessJob: Job? = null
+
+    // Dynamic network monitor for instant re-bind on Wi-Fi reconnect or DHCP IP change
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var networkRebindJob: Job? = null
+
     // Floating emoji reactions fired during active calls
     private val _callReactions = MutableSharedFlow<CallReactionEvent>(extraBufferCapacity = 32)
     val callReactions = _callReactions.asSharedFlow()
 
     private val _incomingRoomInvites = MutableSharedFlow<RoomInvitation>(extraBufferCapacity = 16)
     val incomingRoomInvites = _incomingRoomInvites.asSharedFlow()
+
+    // Blocked peers blacklist (S-02): incoming messages, calls, and invites are discarded
+    private val blockedPeerIds = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    fun setBlockedPeers(ids: Set<String>) {
+        synchronized(blockedPeerIds) {
+            blockedPeerIds.clear()
+            blockedPeerIds.addAll(ids)
+        }
+    }
+
+    fun isPeerBlocked(peerId: String): Boolean = blockedPeerIds.contains(peerId)
 
     private val typingMap = ConcurrentHashMap<String, TypingPeer>()
     private val _typingPeers = MutableStateFlow<List<TypingPeer>>(emptyList())
@@ -203,8 +227,6 @@ class LocalP2PEngine(private val context: Context) {
         multicastLock = NetworkUtils.acquireMulticastLock(context)
 
         videoEngine.setMyIdentity(_userProfile.value.id, _userProfile.value.username)
-
-        audioEngine.startAudioPlayback()
         videoEngine.startVideoReceiver()
 
         startListening()
@@ -227,6 +249,69 @@ class LocalP2PEngine(private val context: Context) {
                 }
                 _discoveredPeers.value = peersMap.values.toList()
                 updateRoomAudioTargets(_currentRoom.value)
+            }
+        }
+
+        registerNetworkMonitor()
+    }
+
+    /**
+     * Registers system network callback to detect Wi-Fi drops, reconnections, or DHCP IP reassignments.
+     */
+    private fun registerNetworkMonitor() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+                unregisterNetworkMonitor()
+                val callback = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        Log.d(TAG, "Wi-Fi Network available: $network")
+                        onNetworkChanged()
+                    }
+
+                    override fun onLost(network: android.net.Network) {
+                        Log.d(TAG, "Wi-Fi Network lost: $network")
+                        onNetworkChanged()
+                    }
+
+                    override fun onLinkPropertiesChanged(network: android.net.Network, linkProperties: android.net.LinkProperties) {
+                        onNetworkChanged()
+                    }
+                }
+                networkCallback = callback
+                cm.registerDefaultNetworkCallback(callback)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to register network callback", e)
+            }
+        }
+    }
+
+    private fun unregisterNetworkMonitor() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                networkCallback?.let {
+                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    cm?.unregisterNetworkCallback(it)
+                }
+            } catch (_: Exception) {}
+            networkCallback = null
+        }
+    }
+
+    private fun onNetworkChanged() {
+        networkRebindJob?.cancel()
+        networkRebindJob = scope.launch {
+            delay(800L) // debounce rapid network transitions
+            val freshIp = NetworkUtils.getLocalIpAddress(context)
+            val oldIp = _localIp.value
+            if (freshIp != oldIp) {
+                Log.i(TAG, "Dynamic IP change detected: $oldIp -> $freshIp. Re-binding sockets & announcing presence.")
+                _localIp.value = freshIp
+                bindToLocalWifiNetworkIfAvailable()
+                if (freshIp.isNotEmpty() && freshIp != "127.0.0.1") {
+                    broadcastPresence()
+                    triggerNetworkScan()
+                }
             }
         }
     }
@@ -267,6 +352,11 @@ class LocalP2PEngine(private val context: Context) {
         ringingTimeoutJob?.cancel()
         incomingRingTimeoutJob?.cancel()
         groupRingTimeoutJob?.cancel()
+        networkRebindJob?.cancel()
+        groupCallLivenessJob?.cancel()
+        groupCallLivenessJob = null
+        lastSeenGroupParticipant.clear()
+        unregisterNetworkMonitor()
         callToneManager.stopAll()
         ScreenCaptureService.stop(context)
         audioEngine.stopAllAudio()
@@ -425,6 +515,9 @@ class LocalP2PEngine(private val context: Context) {
                         put("durationSeconds", message.durationSeconds)
                         put("senderIp", message.senderIp ?: _localIp.value)
                     }
+                    message.replyToId?.let { put("replyToId", it) }
+                    message.replyToSender?.let { put("replyToSender", it) }
+                    message.replyToText?.let { put("replyToText", it) }
                 }
                 sendJsonPacket(json)
             } catch (e: Exception) {
@@ -458,6 +551,9 @@ class LocalP2PEngine(private val context: Context) {
                         put("durationSeconds", message.durationSeconds)
                         put("senderIp", message.senderIp ?: _localIp.value)
                     }
+                    message.replyToId?.let { put("replyToId", it) }
+                    message.replyToSender?.let { put("replyToSender", it) }
+                    message.replyToText?.let { put("replyToText", it) }
                 }
                 sendJsonToIp(json, peer.ip)
             } catch (e: Exception) {
@@ -752,7 +848,10 @@ class LocalP2PEngine(private val context: Context) {
         fileId: String? = null,
         fileName: String? = null,
         fileSize: Long = 0L,
-        mimeType: String? = null
+        mimeType: String? = null,
+        replyToId: String? = null,
+        replyToSender: String? = null,
+        replyToText: String? = null
     ): ChatMessage {
         val msgId = UUID.randomUUID().toString()
         val chatMessage = ChatMessage(
@@ -770,7 +869,10 @@ class LocalP2PEngine(private val context: Context) {
             fileId = fileId,
             fileName = fileName,
             fileSize = fileSize,
-            mimeType = mimeType
+            mimeType = mimeType,
+            replyToId = replyToId,
+            replyToSender = replyToSender,
+            replyToText = replyToText
         )
 
         scope.launch {
@@ -793,6 +895,9 @@ class LocalP2PEngine(private val context: Context) {
                     fileName?.let { put("fileName", it) }
                     if (fileSize > 0) put("fileSize", fileSize)
                     mimeType?.let { put("mimeType", it) }
+                    replyToId?.let { put("replyToId", it) }
+                    replyToSender?.let { put("replyToSender", it) }
+                    replyToText?.let { put("replyToText", it) }
                 }
 
                 if (isDirect) {
@@ -811,6 +916,37 @@ class LocalP2PEngine(private val context: Context) {
         }
 
         return chatMessage
+    }
+
+    /**
+     * Broadcasts a real-time message edit to the peer or room over UDP.
+     */
+    fun sendEditMessage(messageId: String, targetRoomOrPeerId: String, isDirect: Boolean, newContent: String) {
+        scope.launch {
+            try {
+                val json = JSONObject().apply {
+                    put("type", "EDIT_MSG")
+                    put("messageId", messageId)
+                    put("target", targetRoomOrPeerId)
+                    put("isDirect", isDirect)
+                    put("senderId", _userProfile.value.id)
+                    put("newContent", newContent)
+                    put("timestamp", System.currentTimeMillis())
+                }
+                if (isDirect) {
+                    val peer = peersMap[targetRoomOrPeerId]
+                    if (peer != null) {
+                        sendJsonToIp(json, peer.ip)
+                    } else {
+                        sendJsonPacket(json)
+                    }
+                } else {
+                    sendJsonPacket(json)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send message edit", e)
+            }
+        }
     }
 
     // --- Audio session keys (8 bytes, stamped into every audio packet header) ---
@@ -931,6 +1067,19 @@ class LocalP2PEngine(private val context: Context) {
             val call = _activeCall.value
             if (call != null && call.callId == callId && call.state == CallState.OUTGOING_RINGING) {
                 Log.i(TAG, "انتهت مهلة الرنين (45 ثانية) — إنهاء المكالمة: لا يوجد رد")
+                val missedCallMsg = ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    senderId = _userProfile.value.id,
+                    senderName = _userProfile.value.username,
+                    senderColor = _userProfile.value.avatarColor,
+                    targetRoomOrPeerId = call.peer.id,
+                    isDirect = true,
+                    content = if (call.isVideo) "مكالمة فيديو لم يتم الرد عليها" else "مكالمة صوتية لم يتم الرد عليها",
+                    timestamp = System.currentTimeMillis(),
+                    isMine = true,
+                    messageType = MessageType.MISSED_CALL
+                )
+                _incomingMessages.tryEmit(missedCallMsg)
                 endCall()
             }
         }
@@ -942,10 +1091,22 @@ class LocalP2PEngine(private val context: Context) {
             delay(CALL_RINGING_TIMEOUT_MS)
             val call = _activeCall.value
             if (call != null && call.callId == callId && call.state == CallState.INCOMING_RINGING) {
-                Log.i(TAG, "انتهت مهلة رنين المكالمة الواردة (45 ثانية) — رفض تلقائي")
-                callToneManager.stopAll()
-                _activeCall.value = null
-                resumeRoomVoiceAfterCall()
+                Log.i(TAG, "انتهت مهلة رنين المكالمة الواردة (45 ثانية) — رفض تلقائي وإشعار المتصل فوراً")
+                val missedCallMsg = ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    senderId = call.peer.id,
+                    senderName = call.peer.name,
+                    senderColor = call.peer.avatarColor,
+                    targetRoomOrPeerId = call.peer.id,
+                    isDirect = true,
+                    content = if (call.isVideo) "مكالمة فيديو فائتة" else "مكالمة صوتية فائتة",
+                    timestamp = System.currentTimeMillis(),
+                    isMine = false,
+                    messageType = MessageType.MISSED_CALL,
+                    isRead = false
+                )
+                _incomingMessages.tryEmit(missedCallMsg)
+                endCall()
             }
         }
     }
@@ -1287,6 +1448,10 @@ class LocalP2PEngine(private val context: Context) {
                     put("inviterColor", _userProfile.value.avatarColor)
                     put("maxCapacity", room.maxCapacity)
                     put("timestamp", System.currentTimeMillis())
+                    if (!room.passwordHash.isNullOrBlank()) {
+                        put("isProtected", true)
+                        put("passwordHash", room.passwordHash)
+                    }
                 }
                 sendJsonToIp(json, peer.ip)
             } catch (e: Exception) {
@@ -1388,6 +1553,7 @@ class LocalP2PEngine(private val context: Context) {
         audioEngine.authorizeSession(groupSessionKey(callId))
         audioEngine.startAudioRecording(_userProfile.value.id, "group_$callId", groupSessionKey(callId))
         videoEngine.startVideoReceiver()
+        startGroupCallWatchdog(callId, roomId)
 
         scope.launch {
             try {
@@ -1449,6 +1615,7 @@ class LocalP2PEngine(private val context: Context) {
         audioEngine.authorizeSession(groupSessionKey(invitation.callId))
         audioEngine.startAudioRecording(_userProfile.value.id, "group_${invitation.callId}", groupSessionKey(invitation.callId))
         videoEngine.startVideoReceiver()
+        startGroupCallWatchdog(invitation.callId, invitation.roomId)
 
         scope.launch {
             try {
@@ -1472,12 +1639,60 @@ class LocalP2PEngine(private val context: Context) {
         }
     }
 
+    private fun startGroupCallWatchdog(callId: String, roomId: String) {
+        groupCallLivenessJob?.cancel()
+        lastSeenGroupParticipant.clear()
+        val now = System.currentTimeMillis()
+        _activeGroupCall.value?.participants?.forEach { p ->
+            lastSeenGroupParticipant[p.id] = now
+        }
+
+        groupCallLivenessJob = scope.launch {
+            while (isActive) {
+                delay(3000L)
+                val cur = _activeGroupCall.value
+                if (cur == null || cur.callId != callId) break
+
+                // 1. Send periodic ping to keep group membership active
+                try {
+                    val pingJson = JSONObject().apply {
+                        put("type", "GROUP_CALL_PING")
+                        put("callId", callId)
+                        put("peerId", _userProfile.value.id)
+                        put("roomId", roomId)
+                    }
+                    sendJsonPacket(pingJson)
+                } catch (_: Exception) {}
+
+                // 2. Remove silent participants (>12 seconds)
+                val currentTime = System.currentTimeMillis()
+                val liveParticipants = cur.participants.filter { p ->
+                    val lastSeen = lastSeenGroupParticipant[p.id] ?: currentTime
+                    (currentTime - lastSeen) < 12_000L
+                }
+
+                if (liveParticipants.size != cur.participants.size) {
+                    val dead = cur.participants.filter { !liveParticipants.contains(it) }
+                    for (p in dead) {
+                        Log.w(TAG, "Group call peer timed out (>12s): ${p.name} (${p.id}) - removing from call")
+                        lastSeenGroupParticipant.remove(p.id)
+                    }
+                    _activeGroupCall.value = cur.copy(participants = liveParticipants)
+                    updateRoomAudioTargets(roomId)
+                }
+            }
+        }
+    }
+
     /**
      * Leaves the currently active Group Video Call.
      */
     fun leaveGroupVideoCall() {
         val currentGroupCall = _activeGroupCall.value ?: return
         _activeGroupCall.value = null
+        groupCallLivenessJob?.cancel()
+        groupCallLivenessJob = null
+        lastSeenGroupParticipant.clear()
         callToneManager.stopAll()
 
         audioEngine.revokeSession()
@@ -1675,7 +1890,7 @@ class LocalP2PEngine(private val context: Context) {
 
                 "CHAT_MSG" -> {
                     val senderId = json.optString("senderId")
-                    if (senderId == _userProfile.value.id) return
+                    if (senderId == _userProfile.value.id || isPeerBlocked(senderId)) return
 
                     val target = json.optString("target")
                     val isDirect = json.optBoolean("isDirect", false)
@@ -1698,6 +1913,10 @@ class LocalP2PEngine(private val context: Context) {
                     val durationSeconds = json.optInt("durationSeconds", 0)
                     val rawSenderIp = if (json.has("senderIp")) json.optString("senderIp") else null
                     val msgSenderIp = if (!rawSenderIp.isNullOrBlank() && rawSenderIp != "127.0.0.1") rawSenderIp else senderIp
+
+                    val replyToId = if (json.has("replyToId")) json.optString("replyToId") else null
+                    val replyToSender = if (json.has("replyToSender")) json.optString("replyToSender") else null
+                    val replyToText = if (json.has("replyToText")) json.optString("replyToText") else null
 
                     val chatMessage = ChatMessage(
                         id = json.optString("id", UUID.randomUUID().toString()),
@@ -1724,15 +1943,34 @@ class LocalP2PEngine(private val context: Context) {
                         mimeType = mimeType,
                         durationSeconds = durationSeconds,
                         senderIp = msgSenderIp,
-                        isDownloaded = false
+                        isDownloaded = false,
+                        replyToId = replyToId,
+                        replyToSender = replyToSender,
+                        replyToText = replyToText
                     )
 
                     _incomingMessages.tryEmit(chatMessage)
                 }
 
+                "EDIT_MSG" -> {
+                    val messageId = json.optString("messageId")
+                    val newContent = json.optString("newContent")
+                    val senderId = json.optString("senderId")
+                    if (senderId == _userProfile.value.id || isPeerBlocked(senderId)) return
+                    val target = json.optString("target")
+                    val isDirect = json.optBoolean("isDirect", false)
+
+                    if (isDirect && target != _userProfile.value.id) return
+                    if (!isDirect && target != _currentRoom.value && target != "all") return
+
+                    if (messageId.isNotEmpty() && newContent.isNotEmpty()) {
+                        _incomingMessageEdits.tryEmit(Pair(messageId, newContent))
+                    }
+                }
+
                 "TYPING_STATUS" -> {
                     val senderId = json.optString("senderId")
-                    if (senderId == _userProfile.value.id || senderId.isEmpty()) return
+                    if (senderId == _userProfile.value.id || senderId.isEmpty() || isPeerBlocked(senderId)) return
 
                     val target = json.optString("target")
                     val isDirect = json.optBoolean("isDirect", false)
@@ -1762,7 +2000,7 @@ class LocalP2PEngine(private val context: Context) {
 
                 "CALL_INVITE" -> {
                     val callerId = json.optString("callerId")
-                    if (callerId == _userProfile.value.id) return
+                    if (callerId == _userProfile.value.id || isPeerBlocked(callerId)) return
 
                     val callId = json.optString("callId")
                     val isVideo = json.optBoolean("isVideo", false)
@@ -1978,7 +2216,7 @@ class LocalP2PEngine(private val context: Context) {
 
                 "ROOM_INVITE" -> {
                     val inviterId = json.optString("inviterId")
-                    if (inviterId == _userProfile.value.id) return
+                    if (inviterId == _userProfile.value.id || isPeerBlocked(inviterId)) return
 
                     val roomId = json.optString("roomId")
                     val roomName = json.optString("roomName", "غرفة جديدة")
@@ -1987,6 +2225,8 @@ class LocalP2PEngine(private val context: Context) {
                     val inviterColor = json.optLong("inviterColor", 0xFF6750A4)
                     val maxCapacity = json.optInt("maxCapacity", 10)
                     val timestamp = json.optLong("timestamp", System.currentTimeMillis())
+                    val isProtected = json.optBoolean("isProtected", false)
+                    val passwordHash = json.optString("passwordHash").takeIf { it.isNotBlank() }
 
                     val invitation = com.example.model.RoomInvitation(
                         roomId = roomId,
@@ -1996,7 +2236,9 @@ class LocalP2PEngine(private val context: Context) {
                         inviterName = inviterName,
                         inviterColor = inviterColor,
                         maxCapacity = maxCapacity,
-                        timestamp = timestamp
+                        timestamp = timestamp,
+                        isProtected = isProtected,
+                        passwordHash = passwordHash
                     )
 
                     _incomingRoomInvites.tryEmit(invitation)
@@ -2004,7 +2246,7 @@ class LocalP2PEngine(private val context: Context) {
 
                 "GROUP_CALL_START" -> {
                     val initiatorId = json.optString("initiatorId")
-                    if (initiatorId == _userProfile.value.id) return
+                    if (initiatorId == _userProfile.value.id || isPeerBlocked(initiatorId)) return
 
                     val callId = json.optString("callId")
                     val roomId = json.optString("roomId")
@@ -2048,6 +2290,8 @@ class LocalP2PEngine(private val context: Context) {
                     val avatarBase64 = json.optString("avatarBase64").takeIf { it.isNotBlank() }
                     val peerIp = json.optString("peerIp", senderIp)
 
+                    lastSeenGroupParticipant[peerId] = System.currentTimeMillis()
+
                     val joiningPeer = Peer(
                         id = peerId,
                         name = peerName,
@@ -2064,6 +2308,13 @@ class LocalP2PEngine(private val context: Context) {
                         currentList.add(joiningPeer)
                         _activeGroupCall.value = cur.copy(participants = currentList)
                         updateRoomAudioTargets(roomId)
+                    }
+                }
+
+                "GROUP_CALL_PING" -> {
+                    val peerId = json.optString("peerId")
+                    if (peerId.isNotEmpty() && peerId != _userProfile.value.id) {
+                        lastSeenGroupParticipant[peerId] = System.currentTimeMillis()
                     }
                 }
 

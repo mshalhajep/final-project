@@ -36,22 +36,35 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -105,6 +118,7 @@ import com.example.ui.theme.AccentRose
 import com.example.ui.theme.PrimaryCyan
 import com.example.ui.theme.PrimaryPurple
 import com.example.ui.theme.SecondaryTeal
+import com.example.ui.theme.StatusGreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -145,12 +159,28 @@ fun ChatScreen(
     onEditMessage: (String, String) -> Unit = { _, _ -> },
     onDeleteMessage: (String) -> Unit = {},
     onForwardMessage: (ChatMessage, String, Boolean) -> Unit = { _, _, _ -> },
+    initialDraft: String = "",
+    onDraftChange: (String) -> Unit = {},
+    replyingToMessage: ChatMessage? = null,
+    onReplyToMessage: (ChatMessage) -> Unit = {},
+    onCancelReply: () -> Unit = {},
+    voiceDraft: com.example.audio.VoiceNoteRecordResult? = null,
+    isVoiceDraftPlaying: Boolean = false,
+    onPauseAndReviewVoiceNote: () -> Unit = {},
+    onToggleVoiceDraftPlayback: () -> Unit = {},
+    onCancelVoiceDraft: () -> Unit = {},
+    onSendVoiceDraft: () -> Unit = {},
     peers: List<Peer> = emptyList(),
-    rooms: List<RoomInfo> = emptyList()
+    rooms: List<RoomInfo> = emptyList(),
+    isPeerBlocked: Boolean = false,
+    onBlockPeer: (String, String) -> Unit = { _, _ -> },
+    onUnblockPeer: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var inputText by remember { mutableStateOf("") }
+    var inputText by remember(currentTarget) { mutableStateOf(initialDraft) }
+    var isSearchOpen by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
     var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var forwardingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var viewingImage by remember { mutableStateOf<ChatMessage?>(null) }
@@ -158,6 +188,7 @@ fun ChatScreen(
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
     var selectedFileSize by remember { mutableStateOf(0L) }
+    var showPeerMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     // Stop the live typing indicator the moment this chat screen leaves composition
@@ -230,9 +261,18 @@ fun ChatScreen(
 
     val isImeVisible = WindowInsets.isImeVisible
 
-    LaunchedEffect(messages.size, isImeVisible) {
+    LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+
+    LaunchedEffect(isImeVisible) {
+        if (isImeVisible && messages.isNotEmpty()) {
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            if (lastVisible >= messages.size - 3) {
+                listState.animateScrollToItem(messages.size - 1)
+            }
         }
     }
 
@@ -313,6 +353,14 @@ fun ChatScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
+                                if (!isDirectChat && !currentRoomInfo?.passwordHash.isNullOrBlank()) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "محمية",
+                                        tint = PrimaryPurple,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
                                 Text(
                                     text = if (isDirectChat && currentPeer != null) currentPeer.name else (currentRoomInfo?.name ?: "المحادثة العامة"),
                                     style = MaterialTheme.typography.titleSmall,
@@ -357,8 +405,22 @@ fun ChatScreen(
                         }
                     }
 
-                    if (isDirectChat && currentPeer != null) {
-                        Row {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = {
+                                isSearchOpen = !isSearchOpen
+                                if (!isSearchOpen) searchQuery = ""
+                            },
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isSearchOpen) Icons.Default.Close else Icons.Default.Search,
+                                contentDescription = "بحث في الرسائل",
+                                tint = PrimaryPurple,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        if (isDirectChat && currentPeer != null) {
                             IconButton(
                                 onClick = { onCallPeer(currentPeer, false) },
                                 modifier = Modifier.size(34.dp)
@@ -381,6 +443,114 @@ fun ChatScreen(
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
+                            Box {
+                                IconButton(
+                                    onClick = { showPeerMenu = true },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.MoreVert,
+                                        contentDescription = "خيارات المستخدم",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showPeerMenu,
+                                    onDismissRequest = { showPeerMenu = false }
+                                ) {
+                                    if (isPeerBlocked) {
+                                        DropdownMenuItem(
+                                            text = { Text("إلغاء حظر المستخدم") },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Check, contentDescription = null, tint = StatusGreen)
+                                            },
+                                            onClick = {
+                                                showPeerMenu = false
+                                                onUnblockPeer(currentPeer.id)
+                                            }
+                                        )
+                                    } else {
+                                        DropdownMenuItem(
+                                            text = { Text("حظر هذا المستخدم", color = AccentRose) },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Block, contentDescription = null, tint = AccentRose)
+                                            },
+                                            onClick = {
+                                                showPeerMenu = false
+                                                onBlockPeer(currentPeer.id, currentPeer.name)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // In-Chat Search Bar (U-04)
+            AnimatedVisibility(visible = isSearchOpen) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = null,
+                            tint = PrimaryPurple,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("بحث في الرسائل...", style = MaterialTheme.typography.bodySmall) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color.Transparent,
+                                unfocusedBorderColor = Color.Transparent
+                            )
+                        )
+                        if (searchQuery.isNotBlank()) {
+                            val matchCount = messages.count { msg ->
+                                msg.content.contains(searchQuery, ignoreCase = true) ||
+                                (msg.fileName?.contains(searchQuery, ignoreCase = true) == true) ||
+                                msg.senderName.contains(searchQuery, ignoreCase = true)
+                            }
+                            Surface(
+                                color = PrimaryPurple.copy(alpha = 0.2f),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            ) {
+                                Text(
+                                    text = "$matchCount",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = PrimaryPurple,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { searchQuery = "" },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear search",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -392,7 +562,18 @@ fun ChatScreen(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            if (messages.isEmpty()) {
+            val displayedMessages = remember(messages, searchQuery) {
+                if (searchQuery.isBlank()) {
+                    messages
+                } else {
+                    messages.filter { msg ->
+                        msg.content.contains(searchQuery, ignoreCase = true) ||
+                        (msg.fileName?.contains(searchQuery, ignoreCase = true) == true) ||
+                        msg.senderName.contains(searchQuery, ignoreCase = true)
+                    }
+                }
+            }
+            if (displayedMessages.isEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -408,12 +589,12 @@ fun ChatScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "لا توجد رسائل بعد",
+                        text = if (searchQuery.isNotBlank()) "لا توجد نتائج مطابقة" else "لا توجد رسائل بعد",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "ابدأ المحادثة الآن، يتم إرسال الرسائل والصور والملفات محلياً فوراً عبر Wi-Fi دون الحاجة للإنترنت!",
+                        text = if (searchQuery.isNotBlank()) "جرب البحث بكلمات أخرى" else "ابدأ المحادثة الآن، يتم إرسال الرسائل والصور والملفات محلياً فوراً عبر Wi-Fi دون الحاجة للإنترنت!",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
@@ -422,7 +603,7 @@ fun ChatScreen(
             } else {
                 // WhatsApp-style day dividers ("اليوم"/"أمس"/date) + Telegram-style
                 // scroll-to-bottom FAB with a missed-message badge.
-                val chatListItems = remember(messages) { buildChatListItems(messages) }
+                val chatListItems = remember(displayedMessages) { buildChatListItems(displayedMessages) }
                 val isNearBottom by remember {
                     derivedStateOf {
                         val info = listState.layoutInfo
@@ -467,6 +648,17 @@ fun ChatScreen(
                                 onSeekVoiceNote = onSeekVoiceNote,
                                 onCyclePlaybackSpeed = onCyclePlaybackSpeed,
                                 onOpenImage = { msg -> viewingImage = msg },
+                                onReplyQuoteClick = { quoteId ->
+                                    val targetIdx = chatListItems.indexOfFirst {
+                                        it is ChatListItem.Message && it.message.id == quoteId
+                                    }
+                                    if (targetIdx >= 0) {
+                                        scope.launch {
+                                            listState.animateScrollToItem(targetIdx)
+                                        }
+                                    }
+                                },
+                                onReplyClick = { msg -> onReplyToMessage(msg) },
                                 onEditClick = { msg -> editingMessage = msg },
                                 onDeleteClick = { msg -> onDeleteMessage(msg.id) },
                                 onForwardClick = { msg -> forwardingMessage = msg },
@@ -676,6 +868,75 @@ fun ChatScreen(
             )
         }
 
+        // Quoted Reply Preview Bar (U-05)
+        if (replyingToMessage != null) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryPurple.copy(alpha = 0.5f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(3.5.dp)
+                                .height(32.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(PrimaryPurple)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Reply,
+                                    contentDescription = null,
+                                    tint = PrimaryPurple,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "الرد على ${replyingToMessage.senderName}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = PrimaryPurple
+                                )
+                            }
+                            Text(
+                                text = replyingToMessage.content.ifBlank { replyingToMessage.fileName ?: "رسالة" },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = onCancelReply,
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Cancel reply",
+                            tint = AccentRose,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
+
         // Staged File Preview (if file selected)
         if (selectedFileUri != null) {
             Surface(
@@ -783,7 +1044,7 @@ fun ChatScreen(
         }
 
         // Quick Emojis Row (only if not recording)
-        if (!isVoiceRecording) {
+        if (!isVoiceRecording && voiceDraft == null) {
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier
@@ -797,7 +1058,10 @@ fun ChatScreen(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable { inputText += emoji }
+                            .clickable {
+                                inputText += emoji
+                                onDraftChange(inputText)
+                            }
                     ) {
                         Text(
                             text = emoji,
@@ -809,8 +1073,52 @@ fun ChatScreen(
             }
         }
 
-        // Input Field & Action Buttons OR Voice Recording Bar
-        if (isVoiceRecording) {
+        // Input Field & Action Buttons OR Blocked Notice OR Voice Recording Bar OR Voice Draft Review
+        if (isDirectChat && isPeerBlocked && currentPeer != null) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = AccentRose.copy(alpha = 0.12f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, AccentRose.copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Block,
+                            contentDescription = null,
+                            tint = AccentRose,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "لقد قمت بحظر هذا المستخدم. لن تتلقى منه رسائل أو اتصالات.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    Button(
+                        onClick = { onUnblockPeer(currentPeer.id) },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("إلغاء الحظر", style = MaterialTheme.typography.labelMedium, color = Color.White)
+                    }
+                }
+            }
+        } else if (isVoiceRecording) {
             Surface(
                 shape = RoundedCornerShape(24.dp),
                 color = AccentRose.copy(alpha = 0.12f),
@@ -881,7 +1189,7 @@ fun ChatScreen(
                         }
                     }
 
-                    // Actions: Cancel & Send
+                    // Actions: Cancel, Review, & Send
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -903,6 +1211,22 @@ fun ChatScreen(
                         }
 
                         IconButton(
+                            onClick = onPauseAndReviewVoiceNote,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surface)
+                                .testTag("review_chat_voicenote_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Pause,
+                                contentDescription = "معاينة التسجيل الصوتي",
+                                tint = PrimaryPurple,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        IconButton(
                             onClick = onStopAndSendVoiceNote,
                             modifier = Modifier
                                 .size(44.dp)
@@ -913,6 +1237,92 @@ fun ChatScreen(
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Send,
                                 contentDescription = "Send Voice Note",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (voiceDraft != null) {
+            // Voice Note Preview Bar (U-07)
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = PrimaryPurple.copy(alpha = 0.1f),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, PrimaryPurple.copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    IconButton(
+                        onClick = onToggleVoiceDraftPlayback,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(PrimaryPurple)
+                    ) {
+                        Icon(
+                            imageVector = if (isVoiceDraftPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "معاينة التسجيل الصوتي",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "معاينة التسجيل الصوتي",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PrimaryPurple,
+                            fontWeight = FontWeight.Bold
+                        )
+                        val minutes = voiceDraft.durationSeconds / 60
+                        val seconds = voiceDraft.durationSeconds % 60
+                        Text(
+                            text = String.format("%02d:%02d", minutes, seconds),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        IconButton(
+                            onClick = onCancelVoiceDraft,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surface)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "حذف التسجيل",
+                                tint = AccentRose,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onSendVoiceDraft,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(PrimaryPurple)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "إرسال التسجيل الصوتي",
                                 tint = Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -976,6 +1386,7 @@ fun ChatScreen(
                         value = inputText,
                         onValueChange = {
                             inputText = it
+                            onDraftChange(it)
                             onUserTyping(it.isNotBlank())
                         },
                         placeholder = { Text("اكتب رسالة محلياً...", style = MaterialTheme.typography.bodyMedium) },
@@ -1019,10 +1430,14 @@ fun ChatScreen(
                                     selectedFileName = null
                                     selectedFileSize = 0L
                                     inputText = ""
+                                    onDraftChange("")
+                                    onCancelReply()
                                 } else if (inputText.isNotBlank() || selectedImageBitmap != null) {
                                     onSendMessage(inputText.trim(), selectedImageBitmap)
                                     inputText = ""
                                     selectedImageBitmap = null
+                                    onDraftChange("")
+                                    onCancelReply()
                                 }
                             },
                             containerColor = PrimaryPurple,

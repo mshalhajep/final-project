@@ -268,7 +268,11 @@ class VideoEngine(private val context: Context) {
         } else if (_sharedAppName.value != appName) {
             _sharedAppName.value = appName
         }
+        val oldBmp = _localScreenShareBitmap.value
         _localScreenShareBitmap.value = bitmap
+        if (oldBmp != null && oldBmp !== bitmap && !oldBmp.isRecycled) {
+            ScreenCaptureService.recycleBitmap(oldBmp)
+        }
         if (activeTargetAddresses.isEmpty()) return
         scope.launch {
             sendBitmapFrame(bitmap, FRAME_TYPE_SCREEN_SHARE, appName)
@@ -278,7 +282,11 @@ class VideoEngine(private val context: Context) {
     fun stopScreenShare() {
         _isScreenSharing.value = false
         _sharedAppName.value = null
+        val oldBmp = _localScreenShareBitmap.value
         _localScreenShareBitmap.value = null
+        if (oldBmp != null && !oldBmp.isRecycled) {
+            ScreenCaptureService.recycleBitmap(oldBmp)
+        }
         screenShareJob?.cancel()
         screenShareJob = null
     }
@@ -669,7 +677,7 @@ class VideoEngine(private val context: Context) {
             for (col in 0 until width / 2) {
                 val vIndex = row * vRowStride + col * vPixelStride
                 val uIndex = row * uRowStride + col * uPixelStride
-                if (vIndex < vBuffer.limit() && uIndex < vBuffer.limit()) {
+                if (vIndex < vBuffer.limit() && uIndex < uBuffer.limit()) {
                     nv21[pos++] = vBuffer.get(vIndex)
                     nv21[pos++] = uBuffer.get(uIndex)
                 }

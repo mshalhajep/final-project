@@ -2,7 +2,10 @@ package com.example.audio
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +21,22 @@ class VoiceNotePlayer(private val context: Context) {
 
     companion object {
         private const val TAG = "VoiceNotePlayer"
+    }
+
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                stop()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                pause()
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                // Resume if needed
+            }
+        }
     }
 
     private val scope = CoroutineScope(Dispatchers.Main)
@@ -68,6 +87,48 @@ class VoiceNotePlayer(private val context: Context) {
         )
     }
 
+    private fun requestAudioFocus() {
+        val am = audioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val playbackAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+                audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                    .setAudioAttributes(playbackAttributes)
+                    .setAcceptsDelayedFocusGain(false)
+                    .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                    .build()
+                am.requestAudioFocus(audioFocusRequest!!)
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(
+                    audioFocusChangeListener,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to request audio focus in VoiceNotePlayer", e)
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        val am = audioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+                audioFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(audioFocusChangeListener)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to abandon audio focus in VoiceNotePlayer", e)
+        }
+    }
+
     fun togglePlayPause(messageId: String, filePath: String) {
         if (_currentlyPlayingId.value == messageId && _isPlaying.value) {
             pause()
@@ -106,20 +167,29 @@ class VoiceNotePlayer(private val context: Context) {
             _currentPositionMs.value = 0
 
             player.setOnCompletionListener {
+                abandonAudioFocus()
                 _isPlaying.value = false
                 _playbackProgress.value = 0f
                 _currentPositionMs.value = 0
                 _currentlyPlayingId.value = null
                 stopProgressPolling()
+                try {
+                    it.release()
+                } catch (_: Exception) {}
+                if (mediaPlayer === it) {
+                    mediaPlayer = null
+                }
             }
 
             player.setOnErrorListener { p, what, extra ->
                 Log.e(TAG, "MediaPlayer error: what=$what extra=$extra")
+                abandonAudioFocus()
                 try { p.release() } catch (_: Exception) {}
                 stop()
                 true
             }
 
+            requestAudioFocus()
             player.start()
             _isPlaying.value = true
             // Re-apply the chosen speed to freshly created players
@@ -128,6 +198,7 @@ class VoiceNotePlayer(private val context: Context) {
             }
             startProgressPolling()
         } catch (e: Exception) {
+            abandonAudioFocus()
             Log.e(TAG, "Failed to start audio playback for $filePath", e)
             stop()
         }
@@ -135,6 +206,7 @@ class VoiceNotePlayer(private val context: Context) {
 
     fun pause() {
         try {
+            abandonAudioFocus()
             mediaPlayer?.pause()
             _isPlaying.value = false
             stopProgressPolling()
@@ -145,6 +217,7 @@ class VoiceNotePlayer(private val context: Context) {
 
     fun resume() {
         try {
+            requestAudioFocus()
             mediaPlayer?.start()
             _isPlaying.value = true
             startProgressPolling()
@@ -166,18 +239,20 @@ class VoiceNotePlayer(private val context: Context) {
     }
 
     fun stop() {
+        val p = mediaPlayer
+        mediaPlayer = null
+        abandonAudioFocus()
         stopProgressPolling()
         try {
-            mediaPlayer?.apply {
-                if (isPlaying) {
-                    stop()
-                }
-                release()
+            if (p?.isPlaying == true) {
+                p.stop()
             }
         } catch (e: Exception) {
             // Ignore
         } finally {
-            mediaPlayer = null
+            try {
+                p?.release()
+            } catch (_: Exception) {}
             _isPlaying.value = false
             _currentlyPlayingId.value = null
             _playbackProgress.value = 0f

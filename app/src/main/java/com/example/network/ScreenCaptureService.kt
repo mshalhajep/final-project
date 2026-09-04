@@ -54,6 +54,13 @@ class ScreenCaptureService : Service() {
         @Volatile
         var onShareStopped: (() -> Unit)? = null
 
+        @Volatile
+        private var activeService: ScreenCaptureService? = null
+
+        fun recycleBitmap(bitmap: Bitmap) {
+            activeService?.recycleBitmapInternal(bitmap)
+        }
+
         fun start(context: Context, resultCode: Int, projectionData: Intent, appName: String) {
             val intent = Intent(context, ScreenCaptureService::class.java).apply {
                 putExtra(EXTRA_RESULT_CODE, resultCode)
@@ -89,6 +96,23 @@ class ScreenCaptureService : Service() {
     // Small rotating Bitmap pool: the newest frame is handed to the UI/encoder while
     // the converter fills the next one; slots are recycled only after a full cycle.
     private val bitmapPool = ArrayDeque<Bitmap>()
+
+    override fun onCreate() {
+        super.onCreate()
+        activeService = this
+    }
+
+    fun recycleBitmapInternal(bitmap: Bitmap) {
+        if (bitmap.isMutable && !bitmap.isRecycled) {
+            synchronized(bitmapPool) {
+                if (bitmapPool.size < 4) {
+                    bitmapPool.addLast(bitmap)
+                } else {
+                    try { bitmap.recycle() } catch (_: Exception) {}
+                }
+            }
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -289,8 +313,8 @@ class ScreenCaptureService : Service() {
     }
 
     private fun obtainBitmap(width: Int, height: Int): Bitmap {
-        val pooled = bitmapPool.removeFirstOrNull()
-        if (pooled != null && pooled.width == width && pooled.height == height && pooled.isMutable) {
+        val pooled = synchronized(bitmapPool) { bitmapPool.removeFirstOrNull() }
+        if (pooled != null && pooled.width == width && pooled.height == height && pooled.isMutable && !pooled.isRecycled) {
             return pooled
         }
         return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -305,8 +329,13 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onDestroy() {
+        activeService = null
         onFrameCaptured = null
         isCapturing = false
+        synchronized(bitmapPool) {
+            bitmapPool.forEach { try { it.recycle() } catch (_: Exception) {} }
+            bitmapPool.clear()
+        }
         try {
             virtualDisplay?.release()
         } catch (_: Exception) {

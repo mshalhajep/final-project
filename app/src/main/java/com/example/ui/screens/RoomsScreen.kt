@@ -108,6 +108,7 @@ import com.example.ui.components.DateHeaderChip
 import com.example.ui.components.buildChatListItems
 import com.example.ui.components.ChatTypingIndicator
 import com.example.ui.components.ImageViewerDialog
+import com.example.ui.dialogs.EnterRoomPasswordDialog
 import com.example.ui.theme.AccentRose
 import com.example.ui.theme.PrimaryPurple
 import com.example.ui.theme.PrimaryPurpleDark
@@ -155,6 +156,8 @@ fun RoomsScreen(
     onTogglePlayVoiceNote: (ChatMessage) -> Unit = {},
     onSeekVoiceNote: (Float) -> Unit = {},
     onSelectRoom: (String) -> Unit,
+    isRoomPasswordVerified: (String) -> Boolean = { true },
+    onSelectRoomWithPassword: (String, String?) -> Boolean = { id, _ -> onSelectRoom(id); true },
     onCreateRoomClick: () -> Unit,
     onInvitePeersClick: (RoomInfo) -> Unit,
     roomActiveGroupCalls: Map<String, com.example.model.GroupCallInvitation> = emptyMap(),
@@ -176,7 +179,8 @@ fun RoomsScreen(
     onClearRoomJoinError: () -> Unit,
     onEditMessage: (String, String) -> Unit = { _, _ -> },
     onDeleteMessage: (String) -> Unit = {},
-    onForwardMessage: (ChatMessage, String, Boolean) -> Unit = { _, _, _ -> }
+    onForwardMessage: (ChatMessage, String, Boolean) -> Unit = { _, _, _ -> },
+    unreadCounts: Map<String, Int> = emptyMap()
 ) {
     val currentRoomInfo = rooms.find { it.id == currentRoomId } ?: rooms.firstOrNull()
     val roomPeers = peers.filter { it.currentRoom == currentRoomId }
@@ -197,6 +201,8 @@ fun RoomsScreen(
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
     var selectedFileSize by remember { mutableStateOf(0L) }
+    var roomNeedingPassword by remember { mutableStateOf<RoomInfo?>(null) }
+    var passwordError by remember { mutableStateOf<String?>(null) }
 
     // Active typing peers in current room
     val activeRoomTypingPeers = remember(typingPeers, currentRoomId) {
@@ -258,10 +264,19 @@ fun RoomsScreen(
     val isImeVisible = WindowInsets.isImeVisible
     val roomChatItems = remember(inRoomMessages) { buildChatListItems(inRoomMessages) }
 
-    // Auto-scroll chat to bottom on new messages or keyboard open
-    LaunchedEffect(roomChatItems.size, isImeVisible) {
+    // Auto-scroll chat to bottom on new messages or keyboard open (if already near bottom)
+    LaunchedEffect(roomChatItems.size) {
         if (roomChatItems.isNotEmpty()) {
             listState.animateScrollToItem(roomChatItems.size - 1)
+        }
+    }
+
+    LaunchedEffect(isImeVisible) {
+        if (isImeVisible && roomChatItems.isNotEmpty()) {
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            if (lastVisible >= roomChatItems.size - 3) {
+                listState.animateScrollToItem(roomChatItems.size - 1)
+            }
         }
     }
 
@@ -367,11 +382,34 @@ fun RoomsScreen(
         ) {
             items(rooms) { room ->
                 val isSelected = room.id == currentRoomId
+                val isProtected = !room.passwordHash.isNullOrBlank()
+                val isVerified = isRoomPasswordVerified(room.id)
                 val count = if (room.id == currentRoomId) totalInRoom else peers.count { it.currentRoom == room.id }
+                val unread = unreadCounts[room.id] ?: 0
                 FilterChip(
                     selected = isSelected,
-                    onClick = { onSelectRoom(room.id) },
-                    label = { Text("${room.name} ($count/${room.maxCapacity})") },
+                    onClick = {
+                        if (isProtected && !isVerified) {
+                            passwordError = null
+                            roomNeedingPassword = room
+                        } else {
+                            onSelectRoom(room.id)
+                        }
+                    },
+                    label = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isProtected) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "محمية",
+                                    modifier = Modifier.size(13.dp),
+                                    tint = if (isSelected) Color.White else PrimaryPurple
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Text("${room.name} ($count/${room.maxCapacity})")
+                        }
+                    },
                     leadingIcon = {
                         Icon(
                             imageVector = if (isSelected) Icons.Default.Forum else Icons.Default.Group,
@@ -379,6 +417,13 @@ fun RoomsScreen(
                             modifier = Modifier.size(16.dp)
                         )
                     },
+                    trailingIcon = if (unread > 0) {
+                        {
+                            androidx.compose.material3.Badge(containerColor = AccentRose) {
+                                Text("$unread")
+                            }
+                        }
+                    } else null,
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryPurple,
                         selectedLabelColor = Color.White,
@@ -410,6 +455,15 @@ fun RoomsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (!currentRoomInfo?.passwordHash.isNullOrBlank()) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "محمية بكلمة مرور",
+                                    tint = PrimaryPurple,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
                             Text(
                                 text = currentRoomInfo?.name ?: "غرفة الاتصال",
                                 style = MaterialTheme.typography.titleMedium,
@@ -852,6 +906,16 @@ fun RoomsScreen(
                                         onSeekVoiceNote = onSeekVoiceNote,
                                         onCyclePlaybackSpeed = onCyclePlaybackSpeed,
                                         onOpenImage = { msg -> viewingImage = msg },
+                                        onReplyQuoteClick = { quoteId ->
+                                            val targetIdx = chatListItems.indexOfFirst {
+                                                it is ChatListItem.Message && it.message.id == quoteId
+                                            }
+                                            if (targetIdx >= 0) {
+                                                scrollScope.launch {
+                                                    listState.animateScrollToItem(targetIdx)
+                                                }
+                                            }
+                                        },
                                         onEditClick = { msg ->
                                             editingMessage = msg
                                             messageText = msg.content
@@ -1360,6 +1424,27 @@ fun RoomsScreen(
             dismissButton = {
                 TextButton(onClick = { forwardingMessage = null }) {
                     Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Enter Room Password Dialog (S-01)
+    roomNeedingPassword?.let { room ->
+        EnterRoomPasswordDialog(
+            room = room,
+            errorMessage = passwordError,
+            onDismiss = {
+                roomNeedingPassword = null
+                passwordError = null
+            },
+            onJoin = { enteredPassword ->
+                val success = onSelectRoomWithPassword(room.id, enteredPassword)
+                if (success) {
+                    roomNeedingPassword = null
+                    passwordError = null
+                } else {
+                    passwordError = "كلمة المرور غير صحيحة"
                 }
             }
         )

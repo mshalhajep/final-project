@@ -13,7 +13,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import coil.compose.AsyncImage
+import com.example.ui.dialogs.CallDurationTimerText
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -153,138 +156,155 @@ fun FloatingCallPipOverlay(
                 .testTag("floating_call_pip_overlay")
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // 1. Video / Screen Share / Avatar stream
-                if (isVideo) {
-                    when {
-                        // Local user is screen sharing
-                        isScreenSharing && localScreenBitmap != null && !localScreenBitmap!!.isRecycled -> {
-                            Image(
-                                bitmap = localScreenBitmap!!.asImageBitmap(),
-                                contentDescription = "Live Screen Stream",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
+                // 1. Video / Screen Share / Avatar stream (Click anywhere to maximize)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { onMaximize() }
+                ) {
+                    if (isVideo) {
+                        when {
+                            // Local user is screen sharing
+                            isScreenSharing && localScreenBitmap != null && !localScreenBitmap!!.isRecycled -> {
+                                Image(
+                                    bitmap = localScreenBitmap!!.asImageBitmap(),
+                                    contentDescription = "Live Screen Stream",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
 
-                        // Remote video frame available
-                        activeCall != null && remoteVideoFrames[activeCall.peer.id]?.bitmap != null -> {
-                            val frame = remoteVideoFrames[activeCall.peer.id]!!
-                            Image(
-                                bitmap = frame.bitmap!!.asImageBitmap(),
-                                contentDescription = "Remote Stream",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
+                            // Remote video frame available
+                            activeCall != null && remoteVideoFrames[activeCall.peer.id]?.bitmap != null -> {
+                                val frame = remoteVideoFrames[activeCall.peer.id]!!
+                                Image(
+                                    bitmap = frame.bitmap!!.asImageBitmap(),
+                                    contentDescription = "Remote Stream",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
 
-                        // Active group call with any remote frame
-                        activeGroupCall != null && remoteVideoFrames.values.any { it.bitmap != null } -> {
-                            val firstFrame = remoteVideoFrames.values.first { it.bitmap != null }
-                            Image(
-                                bitmap = firstFrame.bitmap!!.asImageBitmap(),
-                                contentDescription = "Group Video",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
+                            // Active group call with any remote frame
+                            activeGroupCall != null && remoteVideoFrames.values.any { it.bitmap != null } -> {
+                                val firstFrame = remoteVideoFrames.values.first { it.bitmap != null }
+                                Image(
+                                    bitmap = firstFrame.bitmap!!.asImageBitmap(),
+                                    contentDescription = "Group Video",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
 
-                        // Local camera preview active
-                        !isLocalCameraOff -> {
-                            CameraPreviewSurface(
-                                videoEngine = videoEngine,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
+                            // Local camera preview active
+                            !isLocalCameraOff -> {
+                                CameraPreviewSurface(
+                                    videoEngine = videoEngine,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
 
-                        // Placeholder Avatar with Speaking Waveform
-                        else -> {
-                            PipAvatarPlaceholder(
-                                name = title,
-                                isSpeaking = micLevel > 0.08f && !isMuted
-                            )
+                            // Peer Avatar with Speaking Waveform and Live Duration Timer
+                            else -> {
+                                PipAvatarPlaceholder(
+                                    peer = activeCall?.peer,
+                                    userProfile = userProfile,
+                                    name = title,
+                                    isSpeaking = micLevel > 0.05f && !isMuted
+                                )
+                            }
                         }
+                    } else {
+                        PipAvatarPlaceholder(
+                            peer = activeCall?.peer,
+                            userProfile = userProfile,
+                            name = title,
+                            isSpeaking = micLevel > 0.05f && !isMuted
+                        )
                     }
-                } else {
-                    PipAvatarPlaceholder(
-                        name = title,
-                        isSpeaking = micLevel > 0.08f && !isMuted
-                    )
                 }
 
-                // Dark gradient overlay on top & bottom for high-contrast controls
+                // Subtle gradient overlay on top & bottom so video/avatar is crisp and visible
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
-                                0.0f to Color.Black.copy(alpha = 0.75f),
-                                0.25f to Color.Transparent,
-                                0.65f to Color.Transparent,
-                                1.0f to Color.Black.copy(alpha = 0.88f)
+                                0.0f to Color.Black.copy(alpha = 0.4f),
+                                0.18f to Color.Transparent,
+                                0.82f to Color.Transparent,
+                                1.0f to Color.Black.copy(alpha = 0.45f)
                             )
                         )
                 )
 
                 // 2. Top Bar: Live Status + Name + Maximize button
-                Row(
+                Surface(
+                    shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                    color = Color.Black.copy(alpha = 0.45f),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                        .align(Alignment.TopCenter),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .align(Alignment.TopCenter)
+                        .clickable { onMaximize() }
                 ) {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        // Live-audio dot: pulses with the speaking level like WhatsApp
-                        val isSpeaking = micLevel > 0.05f && !isMuted
-                        val pulseTransition = rememberInfiniteTransition(label = "pip_live_pulse")
-                        val pulseScale by pulseTransition.animateFloat(
-                            initialValue = 0.75f,
-                            targetValue = 1.25f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(650, easing = FastOutSlowInEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "pipPulseScale"
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .scale(if (isSpeaking) pulseScale else 1f)
-                                .clip(CircleShape)
-                                .background(
-                                    if (isSpeaking) StatusGreen else Color.White.copy(alpha = 0.35f)
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    // Maximize / Expand button
-                    IconButton(
-                        onClick = onMaximize,
                         modifier = Modifier
-                            .size(26.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.25f))
-                            .testTag("pip_maximize_button")
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.OpenInFull,
-                            contentDescription = "Maximize",
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp)
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            val isSpeaking = micLevel > 0.05f && !isMuted
+                            val pulseTransition = rememberInfiniteTransition(label = "pip_live_pulse")
+                            val pulseScale by pulseTransition.animateFloat(
+                                initialValue = 0.75f,
+                                targetValue = 1.25f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(650, easing = FastOutSlowInEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "pipPulseScale"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .scale(if (isSpeaking) pulseScale else 1f)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isSpeaking) StatusGreen else PrimaryCyan
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        // Maximize / Expand button
+                        IconButton(
+                            onClick = onMaximize,
+                            modifier = Modifier
+                                .size(26.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.25f))
+                                .testTag("pip_maximize_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.OpenInFull,
+                                contentDescription = "Maximize",
+                                tint = Color.White,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                     }
                 }
 
@@ -319,64 +339,71 @@ fun FloatingCallPipOverlay(
                     }
                 }
 
-                // 3. Bottom Control Row: Mic, Camera, Switch Camera, End Call
-                Row(
+                // 3. Bottom Control Row: Mic, Camera Switch, End Call
+                Surface(
+                    shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp),
+                    color = Color.Black.copy(alpha = 0.5f),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 6.dp, vertical = 6.dp)
-                        .align(Alignment.BottomCenter),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
+                        .align(Alignment.BottomCenter)
                 ) {
-                    // Mute / Unmute
-                    IconButton(
-                        onClick = onToggleMute,
+                    Row(
                         modifier = Modifier
-                            .size(30.dp)
-                            .clip(CircleShape)
-                            .background(if (isMuted) AccentRose.copy(alpha = 0.8f) else Color.White.copy(alpha = 0.25f))
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                            contentDescription = "Mute",
-                            tint = Color.White,
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
-
-                    // Switch camera (front/back)
-                    if (isVideo && !isLocalCameraOff) {
+                        // Mute / Unmute
                         IconButton(
-                            onClick = onSwitchCamera,
+                            onClick = onToggleMute,
                             modifier = Modifier
-                                .size(30.dp)
+                                .size(32.dp)
                                 .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.25f))
+                                .background(if (isMuted) AccentRose.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.22f))
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Cameraswitch,
-                                contentDescription = "Switch Camera",
+                                imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                                contentDescription = "Mute",
                                 tint = Color.White,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
-                    }
 
-                    // End Call
-                    IconButton(
-                        onClick = onEndCall,
-                        modifier = Modifier
-                            .size(30.dp)
-                            .clip(CircleShape)
-                            .background(AccentRose)
-                            .testTag("pip_end_call_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CallEnd,
-                            contentDescription = "End Call",
-                            tint = Color.White,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        // Switch camera (front/back)
+                        if (isVideo && !isLocalCameraOff) {
+                            IconButton(
+                                onClick = onSwitchCamera,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.22f))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Cameraswitch,
+                                    contentDescription = "Switch Camera",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
+                        // End Call
+                        IconButton(
+                            onClick = onEndCall,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(AccentRose)
+                                .testTag("pip_end_call_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CallEnd,
+                                contentDescription = "End Call",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -386,51 +413,117 @@ fun FloatingCallPipOverlay(
 
 @Composable
 private fun PipAvatarPlaceholder(
+    peer: com.example.model.Peer?,
+    userProfile: UserProfile?,
     name: String,
     isSpeaking: Boolean
 ) {
+    val avatarBase64 = peer?.avatarBase64
+    val avatarUri = peer?.avatarUri
+    val avatarColor = peer?.avatarColor ?: userProfile?.avatarColor ?: 0xFF6366F1L
+
+    val avatarBmp = remember(avatarBase64) {
+        if (!avatarBase64.isNullOrBlank()) {
+            try {
+                val bytes = android.util.Base64.decode(avatarBase64, android.util.Base64.DEFAULT)
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (_: Throwable) { null }
+        } else null
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A)),
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF0F172A), Color(0xFF1E1B4B))
+                )
+            ),
         contentAlignment = Alignment.Center
     ) {
-        if (isSpeaking) {
-            val infiniteTransition = rememberInfiniteTransition(label = "pipSpeak")
-            val scale by infiniteTransition.animateFloat(
-                initialValue = 1f,
-                targetValue = 1.3f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(600, easing = FastOutSlowInEasing),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "speakScale"
-            )
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .scale(scale)
-                    .clip(CircleShape)
-                    .background(PrimaryPurple.copy(alpha = 0.3f))
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .size(52.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.linearGradient(
-                        listOf(PrimaryPurple, PrimaryCyan)
-                    )
-                ),
-            contentAlignment = Alignment.Center
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(top = 10.dp)
         ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.size(76.dp)
+            ) {
+                // Speaking ripple animation
+                if (isSpeaking) {
+                    val infiniteTransition = rememberInfiniteTransition(label = "pipSpeak")
+                    val scale by infiniteTransition.animateFloat(
+                        initialValue = 0.95f,
+                        targetValue = 1.28f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(600, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "speakScale"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(76.dp)
+                            .scale(scale)
+                            .clip(CircleShape)
+                            .background(StatusGreen.copy(alpha = 0.25f))
+                    )
+                }
+
+                // Peer Avatar
+                Box(
+                    modifier = Modifier
+                        .size(62.dp)
+                        .clip(CircleShape)
+                        .background(Color(avatarColor)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    when {
+                        avatarBmp != null -> {
+                            Image(
+                                bitmap = avatarBmp.asImageBitmap(),
+                                contentDescription = name,
+                                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                        !avatarUri.isNullOrBlank() -> {
+                            AsyncImage(
+                                model = avatarUri,
+                                contentDescription = name,
+                                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                        else -> {
+                            Text(
+                                text = name.take(2).uppercase(),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Live Call Duration Timer
+            CallDurationTimerText(
+                color = PrimaryCyan,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(2.dp))
+
             Text(
-                text = name.take(2).uppercase(),
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp
+                text = if (isSpeaking) "يتحدث الآن..." else "مكالمة جارية",
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp,
+                color = if (isSpeaking) StatusGreen else Color.White.copy(alpha = 0.6f)
             )
         }
     }

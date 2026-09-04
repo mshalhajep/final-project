@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +39,8 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.PhoneMissed
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -52,7 +55,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import android.widget.Toast
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -143,6 +145,8 @@ fun ChatMessageBubble(
     onSeekVoiceNote: (Float) -> Unit = {},
     onCyclePlaybackSpeed: () -> Unit = {},
     onOpenImage: (ChatMessage) -> Unit = {},
+    onReplyQuoteClick: ((String) -> Unit)? = null,
+    onReplyClick: ((ChatMessage) -> Unit)? = null,
     onEditClick: ((ChatMessage) -> Unit)? = null,
     onDeleteClick: ((ChatMessage) -> Unit)? = null,
     onForwardClick: ((ChatMessage) -> Unit)? = null,
@@ -270,6 +274,92 @@ fun ChatMessageBubble(
                     Spacer(modifier = Modifier.height(2.dp))
                 }
 
+                // Quoted Reply Card (U-05)
+                if (!message.replyToText.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isMine) Color.White.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .then(
+                                if (!message.replyToId.isNullOrBlank() && onReplyQuoteClick != null) {
+                                    Modifier.clickable { onReplyQuoteClick(message.replyToId!!) }
+                                } else Modifier
+                            )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(3.5.dp)
+                                    .height(32.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(if (isMine) Color.White else PrimaryPurple)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = message.replyToSender ?: "رسالة",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isMine) Color.White else PrimaryPurple,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = message.replyToText!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isMine) Color.White.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // If missed call message (U-09)
+                if (message.messageType == MessageType.MISSED_CALL) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFEF4444).copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PhoneMissed,
+                                contentDescription = "مكالمة فائتة",
+                                tint = Color(0xFFEF4444),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "مكالمة فائتة",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isMine) Color.White else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (message.content.isNotBlank()) {
+                                Text(
+                                    text = message.content,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isMine) Color.White.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // If image preview is available — tap opens the in-app zoom viewer
                 if (decodedBitmap != null) {
                     Image(
@@ -277,7 +367,7 @@ fun ChatMessageBubble(
                         contentDescription = "Chat Image Preview",
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(180.dp)
+                            .heightIn(min = 120.dp, max = 240.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .clickable {
                                 if (message.imageBase64 != null ||
@@ -288,7 +378,7 @@ fun ChatMessageBubble(
                                     onOpenFileClick(message)
                                 }
                             },
-                        contentScale = ContentScale.Crop
+                        contentScale = ContentScale.Fit
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                 }
@@ -330,6 +420,7 @@ fun ChatMessageBubble(
                 // Text Content (if not standard default voice note content or if text message)
                 if (message.content.isNotBlank() && 
                     message.content != message.fileName && 
+                    message.messageType != MessageType.MISSED_CALL &&
                     !(message.messageType == MessageType.VOICE_NOTE && message.content.startsWith("تسجيل صوتي"))) {
                     Text(
                         text = message.content,
@@ -391,6 +482,19 @@ fun ChatMessageBubble(
             expanded = showMenu,
             onDismissRequest = { showMenu = false }
         ) {
+            // 0. Reply (U-05)
+            if (onReplyClick != null) {
+                DropdownMenuItem(
+                    text = { Text("رد") },
+                    leadingIcon = {
+                        Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = null, tint = PrimaryPurple)
+                    },
+                    onClick = {
+                        showMenu = false
+                        onReplyClick(message)
+                    }
+                )
+            }
             // 1. Copy
             if (message.content.isNotBlank() && message.messageType == MessageType.TEXT) {
                 DropdownMenuItem(

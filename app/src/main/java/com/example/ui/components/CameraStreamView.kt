@@ -31,9 +31,14 @@ import com.example.network.VideoEngine
 
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.LaunchedEffect
 
 @Composable
@@ -80,8 +85,12 @@ fun CameraPreviewSurface(
 fun RemotePeerVideoView(
     bitmap: Bitmap?,
     peerName: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enableZoom: Boolean = true
 ) {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
     Box(
         modifier = modifier
             .background(Color(0xFF0F172A)),
@@ -91,8 +100,43 @@ fun RemotePeerVideoView(
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = "Video stream from $peerName",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (enableZoom) {
+                            Modifier
+                                .pointerInput(Unit) {
+                                    detectTapGestures(
+                                        onDoubleTap = {
+                                            scale = 1f
+                                            offset = Offset.Zero
+                                        }
+                                    )
+                                }
+                                .pointerInput(Unit) {
+                                    detectTransformGestures { _, pan, zoom, _ ->
+                                        scale = (scale * zoom).coerceIn(1f, 5f)
+                                        if (scale > 1f) {
+                                            val maxOffsetX = (size.width * (scale - 1)) / 2f
+                                            val maxOffsetY = (size.height * (scale - 1)) / 2f
+                                            offset = Offset(
+                                                x = (offset.x + pan.x).coerceIn(-maxOffsetX, maxOffsetX),
+                                                y = (offset.y + pan.y).coerceIn(-maxOffsetY, maxOffsetY)
+                                            )
+                                        } else {
+                                            offset = Offset.Zero
+                                        }
+                                    }
+                                }
+                                .graphicsLayer {
+                                    scaleX = scale
+                                    scaleY = scale
+                                    translationX = offset.x
+                                    translationY = offset.y
+                                }
+                        } else Modifier
+                    ),
+                contentScale = ContentScale.Fit
             )
         } else {
             Box(

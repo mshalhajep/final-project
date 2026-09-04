@@ -203,7 +203,7 @@ object NetworkUtils {
         return try {
             val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             val lock = wifi?.createMulticastLock("LocalConnectMulticastLock")
-            lock?.setReferenceCounted(true)
+            lock?.setReferenceCounted(false)
             lock?.acquire()
             lock
         } catch (e: Exception) {

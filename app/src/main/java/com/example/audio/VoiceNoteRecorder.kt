@@ -135,15 +135,16 @@ class VoiceNoteRecorder(private val context: Context) {
         val elapsedMs = SystemClock.elapsedRealtime() - recordingStartTime
         val durationSecs = (elapsedMs / 1000).toInt().coerceAtLeast(1)
 
+        val recorder = mediaRecorder
+        mediaRecorder = null
         try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
+            recorder?.stop()
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping MediaRecorder", e)
         } finally {
-            mediaRecorder = null
+            try {
+                recorder?.release()
+            } catch (_: Exception) {}
             _isRecording.value = false
             _currentAmplitude.value = 0f
         }
@@ -168,15 +169,16 @@ class VoiceNoteRecorder(private val context: Context) {
         amplitudeJob?.cancel()
         amplitudeJob = null
 
+        val recorder = mediaRecorder
+        mediaRecorder = null
         try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
+            recorder?.stop()
         } catch (e: Exception) {
             Log.e(TAG, "Error cancelling MediaRecorder", e)
         } finally {
-            mediaRecorder = null
+            try {
+                recorder?.release()
+            } catch (_: Exception) {}
             _isRecording.value = false
             _currentAmplitude.value = 0f
             currentOutputFile?.delete()

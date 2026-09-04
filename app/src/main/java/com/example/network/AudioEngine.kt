@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -20,6 +21,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
@@ -28,6 +30,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
@@ -90,6 +93,22 @@ class AudioEngine(private val context: Context) {
     // Targets to stream audio to (Peer ID -> Pair(IP, Port))
     private val activeTargetAddresses = ConcurrentHashMap<String, Pair<InetAddress, Int>>()
 
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                Log.d(TAG, "Audio focus lost: $focusChange")
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                Log.d(TAG, "Audio focus gained")
+            }
+        }
+    }
+
+    // Mixer queues per sender (senderId -> Queue of PCM frames)
+    private val incomingAudioQueues = ConcurrentHashMap<String, ConcurrentLinkedQueue<ByteArray>>()
+    private val lastHeardSenderMap = ConcurrentHashMap<String, Long>()
+
     init {
         try {
             sendSocket = DatagramSocket()
@@ -129,41 +148,106 @@ class AudioEngine(private val context: Context) {
         applyCommunicationDeviceRouting()
     }
 
+    private fun requestAudioFocus(am: AudioManager) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val playbackAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+                audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(playbackAttributes)
+                    .setAcceptsDelayedFocusGain(false)
+                    .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                    .build()
+                am.requestAudioFocus(audioFocusRequest!!)
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(
+                    audioFocusChangeListener,
+                    AudioManager.STREAM_VOICE_CALL,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to request audio focus", e)
+        }
+    }
+
+    private fun abandonAudioFocus(am: AudioManager) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+                audioFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(audioFocusChangeListener)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to abandon audio focus", e)
+        }
+    }
+
     /**
      * Modern audio routing: on Android 12+ the deprecated isSpeakerphoneOn flag is
-     * replaced by setCommunicationDevice() to switch between earpiece and speaker.
+     * replaced by setCommunicationDevice() to switch between earpiece, speaker,
+     * bluetooth sco headset, or wired headset.
      */
     private fun applyCommunicationDeviceRouting() {
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        audioManager?.let { am ->
-            try {
-                am.mode = AudioManager.MODE_IN_COMMUNICATION
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    val speakerOn = _isSpeakerOn.value
-                    val targetType = if (speakerOn) {
-                        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
-                    } else {
-                        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
-                    }
-                    val device = am.availableCommunicationDevices.firstOrNull { it.type == targetType }
-                    // Some chipsets refuse setCommunicationDevice while a previous
-                    // device is still claimed — clear first, then set.
-                    try {
-                        am.clearCommunicationDevice()
-                    } catch (_: Exception) {
-                    }
-                    if (device != null) {
-                        am.setCommunicationDevice(device)
-                    } else if (!speakerOn) {
-                        am.clearCommunicationDevice()
-                    }
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        try {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val speakerOn = _isSpeakerOn.value
+                val available = audioManager.availableCommunicationDevices
+                val targetDevice = if (speakerOn) {
+                    available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
                 } else {
-                    @Suppress("DEPRECATION")
-                    am.isSpeakerphoneOn = _isSpeakerOn.value
+                    // Priority when speaker is OFF:
+                    // 1. Bluetooth SCO / BLE headset / Hearing aid
+                    // 2. Wired headset / headphones
+                    // 3. Built-in earpiece
+                    val btDevice = available.firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        it.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                        it.type == AudioDeviceInfo.TYPE_HEARING_AID
+                    }
+                    val wiredDevice = available.firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                        it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+                    }
+                    btDevice ?: wiredDevice ?: available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error setting audio routing", e)
+                try {
+                    audioManager.clearCommunicationDevice()
+                } catch (_: Exception) {
+                }
+                if (targetDevice != null) {
+                    audioManager.setCommunicationDevice(targetDevice)
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                val speakerOn = _isSpeakerOn.value
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn = speakerOn
+                if (!speakerOn) {
+                    try {
+                        @Suppress("DEPRECATION")
+                        audioManager.startBluetoothSco()
+                        @Suppress("DEPRECATION")
+                        audioManager.isBluetoothScoOn = true
+                    } catch (_: Exception) {}
+                } else {
+                    try {
+                        @Suppress("DEPRECATION")
+                        audioManager.stopBluetoothSco()
+                        @Suppress("DEPRECATION")
+                        audioManager.isBluetoothScoOn = false
+                    } catch (_: Exception) {}
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting audio routing", e)
         }
     }
 
@@ -201,34 +285,69 @@ class AudioEngine(private val context: Context) {
         startAudioPlayback()
     }
 
-    /** Revokes the authorized session — every incoming audio packet is discarded again. */
+    /** Revokes the authorized session — stops playback and drops incoming audio packets. */
     fun revokeSession() {
         activeAuthorizedSessionId.set(null)
+        stopAudioPlayback()
     }
 
     fun getAuthorizedSession(): String? = activeAuthorizedSessionId.get()
 
     private fun configureAudioMode(active: Boolean) {
         try {
-            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
             if (active) {
-                audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                requestAudioFocus(audioManager)
                 applyCommunicationDeviceRouting()
             } else {
-                audioManager?.mode = AudioManager.MODE_NORMAL
+                abandonAudioFocus(audioManager)
+                audioManager.mode = AudioManager.MODE_NORMAL
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     try {
-                        audioManager?.clearCommunicationDevice()
+                        audioManager.clearCommunicationDevice()
                     } catch (_: Exception) {
                     }
                 } else {
                     @Suppress("DEPRECATION")
-                    audioManager?.isSpeakerphoneOn = false
+                    audioManager.isSpeakerphoneOn = false
+                    try {
+                        @Suppress("DEPRECATION")
+                        audioManager.stopBluetoothSco()
+                        @Suppress("DEPRECATION")
+                        audioManager.isBluetoothScoOn = false
+                    } catch (_: Exception) {}
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to configure audio manager mode", e)
         }
+    }
+
+    /**
+     * Software Audio Mixer for multi-speaker group calls.
+     * Takes 16-bit Mono Little-Endian PCM frames from simultaneous speakers,
+     * computes signed 16-bit integer sums with clipping/clamping protection [-32768, 32767].
+     */
+    private fun mixPcmFrames(frames: List<ByteArray>): ByteArray {
+        if (frames.isEmpty()) return ByteArray(FRAME_SIZE)
+        if (frames.size == 1) return frames[0]
+        val sampleCount = FRAME_SIZE / 2 // 320 samples
+        val out = ByteArray(FRAME_SIZE)
+        for (i in 0 until sampleCount) {
+            var sum = 0
+            val byteOffset = i * 2
+            for (frame in frames) {
+                if (byteOffset + 1 < frame.size) {
+                    val sample = (frame[byteOffset].toInt() and 0xFF) or (frame[byteOffset + 1].toInt() shl 8)
+                    sum += sample.toShort().toInt()
+                }
+            }
+            val clamped = sum.coerceIn(-32768, 32767)
+            out[byteOffset] = (clamped and 0xFF).toByte()
+            out[byteOffset + 1] = ((clamped shr 8) and 0xFF).toByte()
+        }
+        return out
     }
 
     /**
@@ -278,6 +397,39 @@ class AudioEngine(private val context: Context) {
                     receiveBufferSize = 256 * 1024
                 }
 
+                // Mixer playback loop: pulls 1 frame from each active speaker queue, mixes, and writes to AudioTrack
+                val playbackLoopJob = launch {
+                    val framesToMix = mutableListOf<ByteArray>()
+                    while (isActive) {
+                        framesToMix.clear()
+                        val now = System.currentTimeMillis()
+                        val iterator = incomingAudioQueues.entries.iterator()
+                        while (iterator.hasNext()) {
+                            val entry = iterator.next()
+                            val q = entry.value
+                            val frame = q.poll()
+                            if (frame != null) {
+                                framesToMix.add(frame)
+                                lastHeardSenderMap[entry.key] = now
+                            } else {
+                                val lastHeard = lastHeardSenderMap[entry.key] ?: 0L
+                                if (now - lastHeard > 5000L) {
+                                    iterator.remove()
+                                    lastHeardSenderMap.remove(entry.key)
+                                }
+                            }
+                        }
+
+                        if (framesToMix.isEmpty()) {
+                            delay(15)
+                            continue
+                        }
+
+                        val mixed = mixPcmFrames(framesToMix)
+                        audioTrack?.write(mixed, 0, mixed.size)
+                    }
+                }
+
                 val packetBuffer = ByteArray(HEADER_SIZE + FRAME_SIZE + 512)
                 val datagramPacket = DatagramPacket(packetBuffer, packetBuffer.size)
 
@@ -297,9 +449,15 @@ class AudioEngine(private val context: Context) {
                         ).trimEnd { it == '\u0000' }
                         if (packetSession != authorizedSession) continue
 
+                        val senderId = String(
+                            packetBuffer,
+                            0,
+                            HEADER_SENDER_ID_SIZE,
+                            Charsets.UTF_8
+                        ).trimEnd { it == '\u0000' }
+
                         val flags = packetBuffer[HEADER_FLAGS_OFFSET]
                         val encrypted = (flags.toInt() and FLAG_ENCRYPTED.toInt()) != 0
-                        val payloadLength = length - HEADER_SIZE
 
                         val pcm: ByteArray? = if (encrypted) {
                             LocalCryptoEngine.decrypt(
@@ -312,12 +470,20 @@ class AudioEngine(private val context: Context) {
                         }
 
                         if (pcm != null && pcm.isNotEmpty()) {
-                            audioTrack?.write(pcm, 0, pcm.size)
+                            val queue = incomingAudioQueues.getOrPut(senderId) {
+                                ConcurrentLinkedQueue()
+                            }
+                            // Bounded jitter queue: drop oldest if buffer exceeds 4 frames (80ms)
+                            while (queue.size >= 4) {
+                                queue.poll()
+                            }
+                            queue.offer(pcm)
                         }
                     } catch (e: Exception) {
                         if (!isActive) break
                     }
                 }
+                playbackLoopJob.cancel()
             } catch (e: Exception) {
                 Log.e(TAG, "Audio playback loop error", e)
             } finally {
@@ -469,6 +635,11 @@ class AudioEngine(private val context: Context) {
         noiseSuppressor = null
         gainControl?.release()
         gainControl = null
+
+        // If playback is not active either, restore NORMAL mode
+        if (playbackJob == null || playbackJob?.isActive != true) {
+            configureAudioMode(false)
+        }
     }
 
     fun stopAudioPlayback() {
@@ -478,6 +649,8 @@ class AudioEngine(private val context: Context) {
     }
 
     private fun stopPlaybackInternal() {
+        incomingAudioQueues.clear()
+        lastHeardSenderMap.clear()
         try {
             audioTrack?.pause()
             audioTrack?.flush()
@@ -493,6 +666,11 @@ class AudioEngine(private val context: Context) {
             // Ignore
         }
         receiveSocket = null
+
+        // If recording is not active either, restore NORMAL mode
+        if (!_isRecording.value) {
+            configureAudioMode(false)
+        }
     }
 
     fun stopAllAudio() {

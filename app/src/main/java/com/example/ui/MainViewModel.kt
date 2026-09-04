@@ -12,6 +12,7 @@ import com.example.data.local.AppDatabase
 import com.example.data.local.ChatMessageEntity
 import com.example.data.local.RoomEntity
 import com.example.data.local.UserAccountEntity
+import com.example.data.local.BlockedPeerEntity
 import com.example.model.ActiveCall
 import com.example.model.ChatMessage
 import com.example.model.MessageType
@@ -29,6 +30,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.launch
@@ -94,11 +99,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AppDatabase::class.java,
         "offline_p2p_chat.db"
     )
-        .addMigrations(AppDatabase.MIGRATION_6_7)
+        .addMigrations(AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8, AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10)
         .fallbackToDestructiveMigration()
         .build()
 
     private val chatDao = db.chatDao()
+
+    // Blocked Peers list (S-02)
+    private val _blockedPeers = MutableStateFlow<List<BlockedPeerEntity>>(emptyList())
+    val blockedPeers: StateFlow<List<BlockedPeerEntity>> = _blockedPeers.asStateFlow()
+
+    fun blockPeer(peerId: String, peerName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDao.insertBlockedPeer(BlockedPeerEntity(peerId = peerId, peerName = peerName))
+        }
+    }
+
+    fun unblockPeer(peerId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDao.deleteBlockedPeer(peerId)
+        }
+    }
+
+    fun isPeerBlocked(peerId: String): Boolean {
+        return _blockedPeers.value.any { it.peerId == peerId }
+    }
+
+    // Unread message counts per target (peer/room) for notification badges
+    val unreadCounts: StateFlow<Map<String, Int>> = chatDao.getUnreadCounts()
+        .map { list -> list.associate { it.targetRoomOrPeerId to it.unreadCount } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    // In-memory message drafts per conversation target (U-01)
+    private val _messageDrafts = androidx.compose.runtime.mutableStateMapOf<String, String>()
+
+    fun getDraft(targetId: String): String = _messageDrafts[targetId] ?: ""
+
+    fun saveDraft(targetId: String, draft: String) {
+        if (draft.isBlank()) {
+            _messageDrafts.remove(targetId)
+        } else {
+            _messageDrafts[targetId] = draft
+        }
+    }
+
+    // Quoted reply state (U-05)
+    private val _replyingToMessage = MutableStateFlow<ChatMessage?>(null)
+    val replyingToMessage = _replyingToMessage.asStateFlow()
+
+    fun setReplyingTo(message: ChatMessage?) {
+        _replyingToMessage.value = message
+    }
 
     private val themePreferencesRepository = ThemePreferencesRepository(application.applicationContext)
     private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
@@ -276,7 +327,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         durationSeconds = msg.durationSeconds,
                         senderIp = msg.senderIp,
                         localFilePath = msg.localFilePath,
-                        isDownloaded = msg.isDownloaded
+                        isDownloaded = msg.isDownloaded,
+                        isRead = msg.isRead,
+                        replyToId = msg.replyToId,
+                        replyToSender = msg.replyToSender,
+                        replyToText = msg.replyToText
                     )
                 )
 
@@ -323,6 +378,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Listen for real-time remote message edits
+        viewModelScope.launch(Dispatchers.IO) {
+            engine.incomingMessageEdits.collectLatest { (messageId, newContent) ->
+                chatDao.updateMessageContent(messageId, newContent)
+            }
+        }
+
+        // Observe blocked peers (S-02) and sync with engine
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDao.getAllBlockedPeers().collectLatest { blockedList ->
+                _blockedPeers.value = blockedList
+                engine.setBlockedPeers(blockedList.map { it.peerId }.toSet())
+            }
+        }
+
         // Observe messages for active room and current chat target
         observeCurrentChatMessages()
         observeActiveRoomMessages()
@@ -361,7 +431,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isDownloaded = it.isDownloaded || it.isMine,
                             isRead = it.isRead,
                             isEdited = it.isEdited,
-                            deliveryStatus = it.deliveryStatus
+                            deliveryStatus = it.deliveryStatus,
+                            replyToId = it.replyToId,
+                            replyToSender = it.replyToSender,
+                            replyToText = it.replyToText
                         )
                     }
                     sendReadReceipts(entities)
@@ -400,7 +473,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isDownloaded = it.isDownloaded || it.isMine,
                             isRead = it.isRead,
                             isEdited = it.isEdited,
-                            deliveryStatus = it.deliveryStatus
+                            deliveryStatus = it.deliveryStatus,
+                            replyToId = it.replyToId,
+                            replyToSender = it.replyToSender,
+                            replyToText = it.replyToText
                         )
                     }
                     sendReadReceipts(entities)
@@ -414,13 +490,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * (double blue check). The in-memory set prevents duplicate receipts.
      */
     private fun sendReadReceipts(entities: List<ChatMessageEntity>) {
-        if (readReceiptsSent.size > 5000) {
-            val toRemove = readReceiptsSent.take(1000)
-            readReceiptsSent.removeAll(toRemove.toSet())
+        synchronized(readReceiptsSent) {
+            if (readReceiptsSent.size > 5000) {
+                val toRemove = readReceiptsSent.take(1000)
+                readReceiptsSent.removeAll(toRemove.toSet())
+            }
         }
         entities.filter { !it.isMine && !it.senderIp.isNullOrBlank() && it.deliveryStatus < 2 }
             .forEach { entity ->
-                if (readReceiptsSent.add(entity.id)) {
+                val shouldSend = synchronized(readReceiptsSent) {
+                    readReceiptsSent.add(entity.id)
+                }
+                if (shouldSend) {
                     engine.sendMsgRead(entity.id, entity.senderIp!!)
                 }
             }
@@ -488,7 +569,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             creatorId = it.creatorId,
                             creatorName = it.creatorName,
                             maxCapacity = it.maxCapacity,
-                            isPrivate = it.isPrivate
+                            isPrivate = it.isPrivate,
+                            passwordHash = it.passwordHash
                         )
                     }
                 }
@@ -633,13 +715,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedTab.value = tab
     }
 
-    fun joinRoom(roomId: String) {
+    // In-memory verified room passwords for current session (S-01)
+    private val verifiedRoomPasswords = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    fun isRoomPasswordVerified(roomId: String): Boolean {
+        val room = _rooms.value.find { it.id == roomId } ?: return true
+        if (room.passwordHash.isNullOrBlank()) return true
+        return verifiedRoomPasswords.containsKey(roomId)
+    }
+
+    fun joinRoom(roomId: String, password: String? = null): Boolean {
         val targetRoom = _rooms.value.find { it.id == roomId }
         if (targetRoom != null) {
             val currentOccupancy = discoveredPeers.value.count { it.currentRoom == roomId } + 1
             if (currentOccupancy > targetRoom.maxCapacity) {
                 _roomJoinError.value = "الغرفة ممتلئة (${targetRoom.maxCapacity}/${targetRoom.maxCapacity} عضو)"
-                return
+                return false
+            }
+
+            // Check password protection (S-01)
+            if (!targetRoom.passwordHash.isNullOrBlank()) {
+                val isAlreadyVerified = verifiedRoomPasswords.containsKey(roomId)
+                if (!isAlreadyVerified) {
+                    if (password.isNullOrBlank()) {
+                        _roomJoinError.value = "الغرفة محمية بكلمة مرور"
+                        return false
+                    }
+                    val inputHash = hashPassword(password.trim())
+                    if (inputHash != targetRoom.passwordHash) {
+                        _roomJoinError.value = "كلمة المرور غير صحيحة"
+                        return false
+                    }
+                    verifiedRoomPasswords[roomId] = inputHash
+                }
             }
         }
         _roomJoinError.value = null
@@ -647,16 +755,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _currentChatTarget.value = roomId
         _currentChatIsDirect.value = false
         _currentChatPeer.value = null
+        return true
     }
 
     fun clearRoomJoinError() {
         _roomJoinError.value = null
     }
 
-    fun createRoom(name: String, description: String, capacity: Int = 10, isPrivate: Boolean = false) {
+    fun createRoom(
+        name: String,
+        description: String,
+        capacity: Int = 10,
+        isPrivate: Boolean = false,
+        password: String? = null
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
             val id = "room_" + UUID.randomUUID().toString().substring(0, 6)
             val currentProfile = userProfile.value
+            val pHash = if (!password.isNullOrBlank()) hashPassword(password.trim()) else null
             val newRoomEntity = RoomEntity(
                 id = id,
                 name = name,
@@ -666,10 +782,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 creatorId = currentProfile.id,
                 creatorName = currentProfile.displayName.ifBlank { currentProfile.username },
                 maxCapacity = capacity,
-                isPrivate = isPrivate
+                isPrivate = isPrivate,
+                passwordHash = pHash
             )
             chatDao.insertRoom(newRoomEntity)
-            joinRoom(id)
+            if (pHash != null) {
+                verifiedRoomPasswords[id] = pHash
+            }
+            joinRoom(id, password)
         }
     }
 
@@ -731,16 +851,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (uriString.isNullOrBlank()) return null
         return try {
             val uri = android.net.Uri.parse(uriString)
-            val inputStream = getApplication<Application>().contentResolver.openInputStream(uri) ?: return null
-            val original = android.graphics.BitmapFactory.decodeStream(inputStream)
-            inputStream.close()
-            if (original == null) return null
-
-            val targetSize = 120
-            val scaled = Bitmap.createScaledBitmap(original, targetSize, targetSize, true)
-            val out = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, 75, out)
-            val bytes = out.toByteArray()
+            val bytes = getApplication<Application>().contentResolver.openInputStream(uri)?.use { inputStream ->
+                val original = android.graphics.BitmapFactory.decodeStream(inputStream) ?: return null
+                val targetSize = 120
+                val scaled = Bitmap.createScaledBitmap(original, targetSize, targetSize, true)
+                val out = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.JPEG, 75, out)
+                if (scaled != original) scaled.recycle()
+                original.recycle()
+                out.toByteArray()
+            } ?: return null
             Base64.encodeToString(bytes, Base64.NO_WRAP)
         } catch (e: Exception) {
             null
@@ -972,21 +1092,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onUserTyping(false)
         if (bitmap != null) {
             viewModelScope.launch(Dispatchers.IO) {
+                var scaledBmp: Bitmap? = null
                 try {
                     val cacheFile = File(getApplication<android.app.Application>().cacheDir, "IMG_${System.currentTimeMillis()}.jpg")
-                    val stream = FileOutputStream(cacheFile)
                     val maxDim = 1280
-                    val scaledBmp = if (bitmap.width > maxDim || bitmap.height > maxDim) {
+                    scaledBmp = if (bitmap.width > maxDim || bitmap.height > maxDim) {
                         val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
                         val targetW = if (ratio >= 1f) maxDim else (maxDim * ratio).toInt()
                         val targetH = if (ratio >= 1f) (maxDim / ratio).toInt() else maxDim
                         Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
                     } else {
-                        bitmap
+                        null
                     }
-                    scaledBmp.compress(Bitmap.CompressFormat.JPEG, 85, stream)
-                    stream.flush()
-                    stream.close()
+                    val bmpToCompress = scaledBmp ?: bitmap
+                    FileOutputStream(cacheFile).use { stream ->
+                        bmpToCompress.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+                        stream.flush()
+                    }
                     val uri = Uri.fromFile(cacheFile)
                     val isDirect = _currentChatIsDirect.value
                     if (isDirect) {
@@ -1001,6 +1123,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Error sending image message", e)
+                } finally {
+                    if (scaledBmp != null && scaledBmp != bitmap) {
+                        try {
+                            scaledBmp.recycle()
+                        } catch (_: Exception) {}
+                    }
                 }
             }
             return
@@ -1010,6 +1138,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val targetId = _currentChatTarget.value
             val isDirect = _currentChatIsDirect.value
             val currentProfile = userProfile.value
+
+            val replying = _replyingToMessage.value
+            val replyToId = replying?.id
+            val replyToSender = replying?.senderName
+            val replyToText = replying?.content?.take(120)
+            _replyingToMessage.value = null
+            saveDraft(targetId, "")
 
             val msg = ChatMessage(
                 id = UUID.randomUUID().toString(),
@@ -1021,7 +1156,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 content = text,
                 timestamp = System.currentTimeMillis(),
                 isMine = true,
-                messageType = MessageType.TEXT
+                messageType = MessageType.TEXT,
+                replyToId = replyToId,
+                replyToSender = replyToSender,
+                replyToText = replyToText
             )
 
             // Save to DB
@@ -1036,7 +1174,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     content = msg.content,
                     timestamp = msg.timestamp,
                     isMine = true,
-                    messageType = msg.messageType.name
+                    messageType = msg.messageType.name,
+                    replyToId = msg.replyToId,
+                    replyToSender = msg.replyToSender,
+                    replyToText = msg.replyToText
                 )
             )
 
@@ -1135,6 +1276,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val staged = engine.fileTransferEngine.stageFileForSharing(uri) ?: return@launch
             val roomId = currentRoom.value
             val currentProfile = userProfile.value
+            val reply = _replyingToMessage.value
+            _replyingToMessage.value = null
             val isImage = staged.mimeType.startsWith("image/") || engine.fileTransferEngine.isImageFile(staged.fileName)
             val resolvedIp = if (localIp.value.isNotBlank() && localIp.value != "127.0.0.1") localIp.value else com.example.network.NetworkUtils.getLocalIpAddress(getApplication())
 
@@ -1155,7 +1298,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 mimeType = staged.mimeType,
                 senderIp = resolvedIp,
                 localFilePath = staged.localFilePath,
-                isDownloaded = true
+                isDownloaded = true,
+                replyToId = reply?.id,
+                replyToSender = reply?.senderName,
+                replyToText = reply?.content
             )
 
             // Save to DB
@@ -1178,7 +1324,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     mimeType = msg.mimeType,
                     senderIp = msg.senderIp,
                     localFilePath = msg.localFilePath,
-                    isDownloaded = true
+                    isDownloaded = true,
+                    replyToId = reply?.id,
+                    replyToSender = reply?.senderName,
+                    replyToText = reply?.content
                 )
             )
 
@@ -1194,6 +1343,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val staged = engine.fileTransferEngine.stageFileForSharing(uri) ?: return@launch
             val currentProfile = userProfile.value
+            val reply = _replyingToMessage.value
+            _replyingToMessage.value = null
             val isImage = staged.mimeType.startsWith("image/") || engine.fileTransferEngine.isImageFile(staged.fileName)
             val resolvedIp = if (localIp.value.isNotBlank() && localIp.value != "127.0.0.1") localIp.value else com.example.network.NetworkUtils.getLocalIpAddress(getApplication())
 
@@ -1214,7 +1365,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 mimeType = staged.mimeType,
                 senderIp = resolvedIp,
                 localFilePath = staged.localFilePath,
-                isDownloaded = true
+                isDownloaded = true,
+                replyToId = reply?.id,
+                replyToSender = reply?.senderName,
+                replyToText = reply?.content
             )
 
             // Save to DB
@@ -1237,7 +1391,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     mimeType = msg.mimeType,
                     senderIp = msg.senderIp,
                     localFilePath = msg.localFilePath,
-                    isDownloaded = true
+                    isDownloaded = true,
+                    replyToId = reply?.id,
+                    replyToSender = reply?.senderName,
+                    replyToText = reply?.content
                 )
             )
 
@@ -1323,63 +1480,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         engine.voiceNoteRecorder.cancelRecording()
     }
 
-    /**
-     * Stops active recording and sends the voice note into the current active room.
-     */
-    fun stopAndSendInRoomVoiceNote(caption: String = "") {
-        viewModelScope.launch(Dispatchers.IO) {
-            val result = engine.voiceNoteRecorder.stopRecording() ?: return@launch
-            val roomId = currentRoom.value
-            val staged = engine.fileTransferEngine.stageExistingFile(result.file, "audio/m4a")
-            val currentProfile = userProfile.value
+    // Voice Note Preview Draft (U-07)
+    private val _voiceDraft = MutableStateFlow<com.example.audio.VoiceNoteRecordResult?>(null)
+    val voiceDraft = _voiceDraft.asStateFlow()
 
-            val msg = ChatMessage(
-                id = UUID.randomUUID().toString(),
-                senderId = currentProfile.id,
-                senderName = currentProfile.displayName.ifBlank { currentProfile.username },
-                senderColor = currentProfile.avatarColor,
-                targetRoomOrPeerId = roomId,
-                isDirect = false,
-                content = caption.ifBlank { "تسجيل صوتي (${result.durationSeconds} ثانية)" },
-                timestamp = System.currentTimeMillis(),
-                isMine = true,
-                messageType = MessageType.VOICE_NOTE,
-                fileId = staged.fileId,
-                fileName = staged.fileName,
-                fileSize = staged.fileSize,
-                mimeType = "audio/m4a",
-                durationSeconds = result.durationSeconds,
-                senderIp = localIp.value,
-                localFilePath = staged.localFilePath,
-                isDownloaded = true
-            )
+    private val _isVoiceDraftPlaying = MutableStateFlow(false)
+    val isVoiceDraftPlaying = _isVoiceDraftPlaying.asStateFlow()
 
-            chatDao.insertMessage(
-                ChatMessageEntity(
-                    id = msg.id,
-                    senderId = msg.senderId,
-                    senderName = msg.senderName,
-                    senderColor = msg.senderColor,
-                    targetRoomOrPeerId = msg.targetRoomOrPeerId,
-                    isDirect = false,
-                    content = msg.content,
-                    timestamp = msg.timestamp,
-                    isMine = true,
-                    messageType = msg.messageType.name,
-                    imageBase64 = null,
-                    fileId = msg.fileId,
-                    fileName = msg.fileName,
-                    fileSize = msg.fileSize,
-                    mimeType = msg.mimeType,
-                    durationSeconds = msg.durationSeconds,
-                    senderIp = msg.senderIp,
-                    localFilePath = msg.localFilePath,
-                    isDownloaded = true
-                )
-            )
+    fun pauseAndReviewVoiceRecording() {
+        onUserTyping(false)
+        val result = engine.voiceNoteRecorder.stopRecording()
+        _voiceDraft.value = result
+    }
 
-            engine.sendRoomMessage(roomId, msg)
+    fun toggleVoiceDraftPlayback() {
+        val draft = _voiceDraft.value ?: return
+        if (_isVoiceDraftPlaying.value) {
+            engine.voiceNotePlayer.stop()
+            _isVoiceDraftPlaying.value = false
+        } else {
+            engine.voiceNotePlayer.play("draft_preview", draft.file.absolutePath)
+            _isVoiceDraftPlaying.value = true
         }
+    }
+
+    fun cancelVoiceDraft() {
+        if (_isVoiceDraftPlaying.value) {
+            engine.voiceNotePlayer.stop()
+            _isVoiceDraftPlaying.value = false
+        }
+        _voiceDraft.value?.file?.delete()
+        _voiceDraft.value = null
+    }
+
+    fun sendVoiceDraft(caption: String = "") {
+        val draft = _voiceDraft.value ?: return
+        if (_isVoiceDraftPlaying.value) {
+            engine.voiceNotePlayer.stop()
+            _isVoiceDraftPlaying.value = false
+        }
+        _voiceDraft.value = null
+        sendRecordedVoiceResult(draft, caption)
     }
 
     /**
@@ -1387,80 +1528,138 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun stopAndSendVoiceNote(caption: String = "") {
         onUserTyping(false)
-        val peer = _currentChatPeer.value
-        if (peer != null) {
-            stopAndSendDirectVoiceNote(peer, caption)
-        } else {
-            val target = _currentChatTarget.value
-            if (target.startsWith("peer_")) {
-                val peerId = target.removePrefix("peer_")
-                val foundPeer = discoveredPeers.value.find { it.id == peerId }
-                if (foundPeer != null) {
-                    stopAndSendDirectVoiceNote(foundPeer, caption)
-                } else {
-                    stopAndSendInRoomVoiceNote(caption)
-                }
-            } else {
-                stopAndSendInRoomVoiceNote(caption)
-            }
-        }
+        val result = engine.voiceNoteRecorder.stopRecording() ?: return
+        sendRecordedVoiceResult(result, caption)
+    }
+
+    fun stopAndSendInRoomVoiceNote(caption: String = "") {
+        stopAndSendVoiceNote(caption)
     }
 
     /**
-     * Stops active recording and sends the voice note directly to a specific peer.
+     * Internal helper to stage and send a completed VoiceNoteRecordResult with reply metadata.
      */
-    fun stopAndSendDirectVoiceNote(peer: Peer, caption: String = "") {
-        viewModelScope.launch(Dispatchers.IO) {
-            val result = engine.voiceNoteRecorder.stopRecording() ?: return@launch
-            val staged = engine.fileTransferEngine.stageExistingFile(result.file, "audio/m4a")
-            val currentProfile = userProfile.value
+    private fun sendRecordedVoiceResult(result: com.example.audio.VoiceNoteRecordResult, caption: String = "") {
+        val reply = _replyingToMessage.value
+        _replyingToMessage.value = null
+        val peer = _currentChatPeer.value
+        if (peer != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val staged = engine.fileTransferEngine.stageExistingFile(result.file, "audio/m4a")
+                val currentProfile = userProfile.value
 
-            val msg = ChatMessage(
-                id = UUID.randomUUID().toString(),
-                senderId = currentProfile.id,
-                senderName = currentProfile.displayName.ifBlank { currentProfile.username },
-                senderColor = currentProfile.avatarColor,
-                targetRoomOrPeerId = peer.id,
-                isDirect = true,
-                content = caption.ifBlank { "تسجيل صوتي (${result.durationSeconds} ثانية)" },
-                timestamp = System.currentTimeMillis(),
-                isMine = true,
-                messageType = MessageType.VOICE_NOTE,
-                fileId = staged.fileId,
-                fileName = staged.fileName,
-                fileSize = staged.fileSize,
-                mimeType = "audio/m4a",
-                durationSeconds = result.durationSeconds,
-                senderIp = localIp.value,
-                localFilePath = staged.localFilePath,
-                isDownloaded = true
-            )
-
-            chatDao.insertMessage(
-                ChatMessageEntity(
-                    id = msg.id,
-                    senderId = msg.senderId,
-                    senderName = msg.senderName,
-                    senderColor = msg.senderColor,
-                    targetRoomOrPeerId = msg.targetRoomOrPeerId,
+                val msg = ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    senderId = currentProfile.id,
+                    senderName = currentProfile.displayName.ifBlank { currentProfile.username },
+                    senderColor = currentProfile.avatarColor,
+                    targetRoomOrPeerId = peer.id,
                     isDirect = true,
-                    content = msg.content,
-                    timestamp = msg.timestamp,
+                    content = caption.ifBlank { "تسجيل صوتي (${result.durationSeconds} ثانية)" },
+                    timestamp = System.currentTimeMillis(),
                     isMine = true,
-                    messageType = msg.messageType.name,
-                    imageBase64 = null,
-                    fileId = msg.fileId,
-                    fileName = msg.fileName,
-                    fileSize = msg.fileSize,
-                    mimeType = msg.mimeType,
-                    durationSeconds = msg.durationSeconds,
-                    senderIp = msg.senderIp,
-                    localFilePath = msg.localFilePath,
-                    isDownloaded = true
+                    messageType = MessageType.VOICE_NOTE,
+                    fileId = staged.fileId,
+                    fileName = staged.fileName,
+                    fileSize = staged.fileSize,
+                    mimeType = "audio/m4a",
+                    durationSeconds = result.durationSeconds,
+                    senderIp = localIp.value,
+                    localFilePath = staged.localFilePath,
+                    isDownloaded = true,
+                    replyToId = reply?.id,
+                    replyToSender = reply?.senderName,
+                    replyToText = reply?.content
                 )
-            )
 
-            engine.sendDirectMessage(peer, msg)
+                chatDao.insertMessage(
+                    ChatMessageEntity(
+                        id = msg.id,
+                        senderId = msg.senderId,
+                        senderName = msg.senderName,
+                        senderColor = msg.senderColor,
+                        targetRoomOrPeerId = msg.targetRoomOrPeerId,
+                        isDirect = true,
+                        content = msg.content,
+                        timestamp = msg.timestamp,
+                        isMine = true,
+                        messageType = msg.messageType.name,
+                        imageBase64 = null,
+                        fileId = msg.fileId,
+                        fileName = msg.fileName,
+                        fileSize = msg.fileSize,
+                        mimeType = msg.mimeType,
+                        durationSeconds = msg.durationSeconds,
+                        senderIp = msg.senderIp,
+                        localFilePath = msg.localFilePath,
+                        isDownloaded = true,
+                        replyToId = reply?.id,
+                        replyToSender = reply?.senderName,
+                        replyToText = reply?.content
+                    )
+                )
+
+                engine.sendDirectMessage(peer, msg)
+            }
+        } else {
+            viewModelScope.launch(Dispatchers.IO) {
+                val roomId = _currentChatTarget.value.ifBlank { currentRoom.value }.ifBlank { "general" }
+                val staged = engine.fileTransferEngine.stageExistingFile(result.file, "audio/m4a")
+                val currentProfile = userProfile.value
+
+                val msg = ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    senderId = currentProfile.id,
+                    senderName = currentProfile.displayName.ifBlank { currentProfile.username },
+                    senderColor = currentProfile.avatarColor,
+                    targetRoomOrPeerId = roomId,
+                    isDirect = false,
+                    content = caption.ifBlank { "تسجيل صوتي (${result.durationSeconds} ثانية)" },
+                    timestamp = System.currentTimeMillis(),
+                    isMine = true,
+                    messageType = MessageType.VOICE_NOTE,
+                    fileId = staged.fileId,
+                    fileName = staged.fileName,
+                    fileSize = staged.fileSize,
+                    mimeType = "audio/m4a",
+                    durationSeconds = result.durationSeconds,
+                    senderIp = localIp.value,
+                    localFilePath = staged.localFilePath,
+                    isDownloaded = true,
+                    replyToId = reply?.id,
+                    replyToSender = reply?.senderName,
+                    replyToText = reply?.content
+                )
+
+                chatDao.insertMessage(
+                    ChatMessageEntity(
+                        id = msg.id,
+                        senderId = msg.senderId,
+                        senderName = msg.senderName,
+                        senderColor = msg.senderColor,
+                        targetRoomOrPeerId = msg.targetRoomOrPeerId,
+                        isDirect = false,
+                        content = msg.content,
+                        timestamp = msg.timestamp,
+                        isMine = true,
+                        messageType = msg.messageType.name,
+                        imageBase64 = null,
+                        fileId = msg.fileId,
+                        fileName = msg.fileName,
+                        fileSize = msg.fileSize,
+                        mimeType = msg.mimeType,
+                        durationSeconds = msg.durationSeconds,
+                        senderIp = msg.senderIp,
+                        localFilePath = msg.localFilePath,
+                        isDownloaded = true,
+                        replyToId = reply?.id,
+                        replyToSender = reply?.senderName,
+                        replyToText = reply?.content
+                    )
+                )
+
+                engine.sendRoomMessage(roomId, msg)
+            }
         }
     }
 
@@ -1503,21 +1702,75 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun editMessage(messageId: String, newContent: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            if (newContent.isNotBlank()) {
-                chatDao.updateMessageContent(messageId, newContent.trim())
+            val trimmed = newContent.trim()
+            if (trimmed.isNotBlank()) {
+                chatDao.updateMessageContent(messageId, trimmed)
+                val msg = chatDao.getMessageById(messageId)
+                if (msg != null) {
+                    engine.sendEditMessage(
+                        messageId = msg.id,
+                        targetRoomOrPeerId = msg.targetRoomOrPeerId,
+                        isDirect = msg.isDirect,
+                        newContent = trimmed
+                    )
+                }
             }
         }
     }
 
     fun deleteMessage(messageId: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val entity = chatDao.getMessageById(messageId)
+                if (entity != null && !entity.localFilePath.isNullOrBlank()) {
+                    val file = File(entity.localFilePath)
+                    if (file.exists()) {
+                        file.delete()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Failed to delete underlying file for message $messageId", e)
+            }
             chatDao.deleteMessage(messageId)
+        }
+    }
+
+    fun clearAppCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cacheDir = getApplication<android.app.Application>().cacheDir
+                cacheDir.deleteRecursively()
+                cacheDir.mkdirs()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Failed to clear app cache", e)
+            }
         }
     }
 
     fun forwardMessage(message: ChatMessage, targetRoomOrPeerId: String, isDirect: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             val currentProfile = userProfile.value
+
+            var fFileId = message.fileId
+            var fFileName = message.fileName
+            var fFileSize = message.fileSize
+            var fMimeType = message.mimeType
+            var fLocalFilePath = message.localFilePath
+
+            // Ensure locally downloaded/staged file is staged with a fresh ID in FileTransferEngine
+            // so this device can properly serve download requests from the forwarded recipient
+            if (!message.localFilePath.isNullOrBlank()) {
+                val existingFile = File(message.localFilePath)
+                if (existingFile.exists() && existingFile.length() > 0) {
+                    val staged = engine.fileTransferEngine.stageExistingFile(existingFile, message.mimeType ?: "*/*")
+                    fFileId = staged.fileId
+                    fFileName = staged.fileName
+                    fFileSize = staged.fileSize
+                    fMimeType = staged.mimeType
+                    fLocalFilePath = staged.localFilePath
+                }
+            }
+
             val newMsg = ChatMessage(
                 id = UUID.randomUUID().toString(),
                 senderId = currentProfile.id,
@@ -1530,13 +1783,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isMine = true,
                 messageType = message.messageType,
                 imageBase64 = message.imageBase64,
-                fileId = message.fileId,
-                fileName = message.fileName,
-                fileSize = message.fileSize,
-                mimeType = message.mimeType,
+                fileId = fFileId,
+                fileName = fFileName,
+                fileSize = fFileSize,
+                mimeType = fMimeType,
                 durationSeconds = message.durationSeconds,
                 senderIp = localIp.value,
-                localFilePath = message.localFilePath,
+                localFilePath = fLocalFilePath,
                 isDownloaded = true
             )
 

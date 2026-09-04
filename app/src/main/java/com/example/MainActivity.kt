@@ -98,6 +98,7 @@ import com.example.ui.AuthState
 import com.example.ui.MainViewModel
 import com.example.ui.NetworkStatusState
 import com.example.ui.dialogs.AddRoomDialog
+import com.example.ui.dialogs.BlockedPeersDialog
 import com.example.ui.dialogs.CallScreenDialog
 import com.example.ui.dialogs.GroupCallScreenDialog
 import com.example.ui.dialogs.IncomingGroupCallDialog
@@ -128,11 +129,15 @@ class MainActivity : ComponentActivity() {
         /** Live video-call marker so PiP is entered only for video calls. */
         @Volatile
         var isVideoCallActiveForPip: Boolean = false
+        val isInPipMode = androidx.compose.runtime.mutableStateOf(false)
     }
+
+    private var proximityWakeLock: android.os.PowerManager.WakeLock? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        initProximitySensor()
         setContent {
             // Theme selected in settings (DARK/LIGHT/SYSTEM) is bound at the root so
             // switching applies instantly instead of always following the system.
@@ -150,6 +155,71 @@ class MainActivity : ComponentActivity() {
             }
         }
         handleNavigationIntent(intent)
+    }
+
+    private fun initProximitySensor() {
+        try {
+            val pm = getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager ?: return
+            if (pm.isWakeLockLevelSupported(android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+                proximityWakeLock = pm.newWakeLock(
+                    android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                    "LocalConnect:ProximityLock"
+                )
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun updateLockScreenWake(wake: Boolean) {
+        try {
+            if (wake) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+                    setShowWhenLocked(true)
+                    setTurnScreenOn(true)
+                } else {
+                    @Suppress("DEPRECATION")
+                    window.addFlags(
+                        android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                    )
+                }
+                window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+                    setShowWhenLocked(false)
+                    setTurnScreenOn(false)
+                } else {
+                    @Suppress("DEPRECATION")
+                    window.clearFlags(
+                        android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                    )
+                }
+                window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun updateProximitySensor(enable: Boolean) {
+        try {
+            if (enable) {
+                if (proximityWakeLock?.isHeld == false) {
+                    proximityWakeLock?.acquire(15 * 60 * 1000L)
+                }
+            } else {
+                if (proximityWakeLock?.isHeld == true) {
+                    proximityWakeLock?.release()
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            if (proximityWakeLock?.isHeld == true) {
+                proximityWakeLock?.release()
+            }
+        } catch (_: Exception) {}
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -182,6 +252,14 @@ class MainActivity : ComponentActivity() {
                 } catch (_: Exception) {}
             }
         }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        isInPipMode.value = isInPictureInPictureMode
     }
 }
 
@@ -326,6 +404,10 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
     val isDirectChat by viewModel.currentChatIsDirect.collectAsState()
     val currentChatPeer by viewModel.currentChatPeer.collectAsState()
     val typingPeers by viewModel.typingPeers.collectAsState()
+    val unreadCounts by viewModel.unreadCounts.collectAsState()
+    val replyingToMessage by viewModel.replyingToMessage.collectAsState()
+    val voiceDraft by viewModel.voiceDraft.collectAsState()
+    val isVoiceDraftPlaying by viewModel.isVoiceDraftPlaying.collectAsState()
     val activeRoomInvitation by viewModel.activeRoomInvitation.collectAsState()
     val isHotspotDataWarning by viewModel.isHotspotDataWarning.collectAsState()
     val roomActiveGroupCalls by viewModel.roomActiveGroupCalls.collectAsState()
@@ -381,15 +463,36 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
     val lastScanTime by viewModel.lastScanTime.collectAsState()
     val networkStatus by viewModel.networkStatus.collectAsState()
     val isNotificationMuted by viewModel.isNotificationMuted.collectAsState()
+    val blockedPeers by viewModel.blockedPeers.collectAsState()
 
     // Dialogs state
     var showProfileDialog by remember { mutableStateOf(false) }
+    var showBlockedPeersDialog by remember { mutableStateOf(false) }
     var showAddRoomDialog by remember { mutableStateOf(false) }
     var showManualIpDialog by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var roomToInvite by remember { mutableStateOf<RoomInfo?>(null) }
     var isCallMinimizedToPip by remember { mutableStateOf(false) }
     var isGroupCallMinimizedToPip by remember { mutableStateOf(false) }
+
+    val activity = context as? MainActivity
+
+    // U-02: Lock screen wake on incoming/active calls
+    LaunchedEffect(activeCall?.state) {
+        val shouldWake = activeCall != null &&
+                activeCall?.state != com.example.model.CallState.ENDED &&
+                activeCall?.state != com.example.model.CallState.IDLE
+        activity?.updateLockScreenWake(shouldWake)
+    }
+
+    // U-03: Proximity sensor during active non-speaker audio call
+    LaunchedEffect(activeCall?.state, activeCall?.isVideo, isSpeakerOn) {
+        val shouldEnableProximity = activeCall != null &&
+                activeCall?.state == com.example.model.CallState.CONNECTED &&
+                activeCall?.isVideo != true &&
+                !isSpeakerOn
+        activity?.updateProximitySensor(shouldEnableProximity)
+    }
 
     LaunchedEffect(activeCall) {
         if (activeCall == null || activeCall?.state == com.example.model.CallState.ENDED || activeCall?.state == com.example.model.CallState.IDLE) {
@@ -412,11 +515,14 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
 
     val currentRoomInfo = rooms.find { it.id == currentRoomId }
     val isImeVisible = WindowInsets.isImeVisible
+    val themeMode by viewModel.themeMode.collectAsState()
+    val isInPipMode by MainActivity.isInPipMode
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
-            TopAppBar(
+            if (!isInPipMode) {
+                TopAppBar(
                 title = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -575,9 +681,10 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             )
+            }
         },
         bottomBar = {
-            if (!isImeVisible) {
+            if (!isInPipMode && !isImeVisible) {
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
@@ -621,15 +728,16 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                     )
 
                     // Tab 3: Chat
+                    val totalUnread = unreadCounts.values.sum()
                     NavigationBarItem(
                         selected = selectedTab == AppTab.CHAT,
                         onClick = { viewModel.selectTab(AppTab.CHAT) },
                         icon = {
                             BadgedBox(
                                 badge = {
-                                    if (messages.isNotEmpty()) {
+                                    if (totalUnread > 0) {
                                         Badge(containerColor = PrimaryPurple) {
-                                            Text(text = "${messages.size}")
+                                            Text(text = "$totalUnread")
                                         }
                                     }
                                 }
@@ -664,7 +772,7 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(if (isInPipMode) androidx.compose.foundation.layout.PaddingValues(0.dp) else innerPadding)
         ) {
             // Reusable Network Status & Offline Warning Banner
             NetworkStatusBanner(
@@ -720,6 +828,8 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         onCancelVoiceRecording = { viewModel.cancelVoiceRecording() },
                         onTogglePlayVoiceNote = { msg -> viewModel.toggleVoiceNotePlayback(msg) },
                         onSeekVoiceNote = { frac -> viewModel.seekVoiceNote(frac) },
+                        isRoomPasswordVerified = { roomId -> viewModel.isRoomPasswordVerified(roomId) },
+                        onSelectRoomWithPassword = { roomId, password -> viewModel.joinRoom(roomId, password) },
                         onSelectRoom = { roomId -> viewModel.joinRoom(roomId) },
                         onCreateRoomClick = { showAddRoomDialog = true },
                         onInvitePeersClick = { room -> roomToInvite = room },
@@ -747,7 +857,8 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         onClearRoomJoinError = { viewModel.clearRoomJoinError() },
                         onEditMessage = { id, text -> viewModel.editMessage(id, text) },
                         onDeleteMessage = { id -> viewModel.deleteMessage(id) },
-                        onForwardMessage = { msg, targetId, isDirect -> viewModel.forwardMessage(msg, targetId, isDirect) }
+                        onForwardMessage = { msg, targetId, isDirect -> viewModel.forwardMessage(msg, targetId, isDirect) },
+                        unreadCounts = unreadCounts
                     )
                 }
 
@@ -764,7 +875,8 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         onAudioCall = { peer -> viewModel.startCall(peer, false) },
                         onVideoCall = { peer -> viewModel.startCall(peer, true) },
                         onDirectChat = { peer -> viewModel.openDirectChat(peer) },
-                        onManualConnectClick = { showManualIpDialog = true }
+                        onManualConnectClick = { showManualIpDialog = true },
+                        unreadCounts = unreadCounts
                     )
                 }
 
@@ -803,8 +915,22 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         onEditMessage = { id, text -> viewModel.editMessage(id, text) },
                         onDeleteMessage = { id -> viewModel.deleteMessage(id) },
                         onForwardMessage = { msg, targetId, isDirect -> viewModel.forwardMessage(msg, targetId, isDirect) },
+                        initialDraft = viewModel.getDraft(currentChatTarget),
+                        onDraftChange = { text -> viewModel.saveDraft(currentChatTarget, text) },
+                        replyingToMessage = replyingToMessage,
+                        onReplyToMessage = { msg -> viewModel.setReplyingTo(msg) },
+                        onCancelReply = { viewModel.setReplyingTo(null) },
+                        voiceDraft = voiceDraft,
+                        isVoiceDraftPlaying = isVoiceDraftPlaying,
+                        onPauseAndReviewVoiceNote = { viewModel.pauseAndReviewVoiceRecording() },
+                        onToggleVoiceDraftPlayback = { viewModel.toggleVoiceDraftPlayback() },
+                        onCancelVoiceDraft = { viewModel.cancelVoiceDraft() },
+                        onSendVoiceDraft = { viewModel.sendVoiceDraft() },
                         peers = peers,
-                        rooms = rooms
+                        rooms = rooms,
+                        isPeerBlocked = currentChatPeer?.let { viewModel.isPeerBlocked(it.id) } ?: false,
+                        onBlockPeer = { peerId, peerName -> viewModel.blockPeer(peerId, peerName) },
+                        onUnblockPeer = { peerId -> viewModel.unblockPeer(peerId) }
                     )
                 }
 
@@ -814,14 +940,16 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                         localIp = localIp,
                         micLevel = micLevel,
                         activePeersCount = peers.size,
+                        currentThemeMode = themeMode,
+                        onThemeModeChange = { viewModel.setThemeMode(it) },
                         onEditProfileClick = { showProfileDialog = true },
                         onManualConnectClick = { showManualIpDialog = true }
                     )
                 }
             }
 
-            // Fullscreen Active Call Overlay if in 1-to-1 Call (when not minimized)
-            if (activeCall != null && !isCallMinimizedToPip) {
+            // Fullscreen Active Call Overlay if in 1-to-1 Call (when not minimized or in system PiP)
+            if (activeCall != null && (!isCallMinimizedToPip || isInPipMode)) {
                 CallScreenDialog(
                     activeCall = activeCall!!,
                     videoEngine = viewModel.engine.videoEngine,
@@ -831,6 +959,7 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                     isSpeakerOn = isSpeakerOn,
                     callVolume = callVolume,
                     signalInfo = callSignalInfo,
+                    isInPipMode = isInPipMode,
                     onAccept = { viewModel.acceptCall() },
                     onDecline = { viewModel.endCall() },
                     onEnd = { viewModel.endCall() },
@@ -847,8 +976,8 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                 )
             }
 
-            // Fullscreen Active Multi-Peer Group Video Call Overlay (when not minimized)
-            if (activeGroupCall != null && !isGroupCallMinimizedToPip) {
+            // Fullscreen Active Multi-Peer Group Video Call Overlay (when not minimized or in system PiP)
+            if (activeGroupCall != null && (!isGroupCallMinimizedToPip || isInPipMode)) {
                 GroupCallScreenDialog(
                     activeGroupCall = activeGroupCall!!,
                     userProfile = userProfile,
@@ -858,6 +987,7 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                     isMuted = isMuted,
                     isSpeakerOn = isSpeakerOn,
                     callVolume = callVolume,
+                    isInPipMode = isInPipMode,
                     onEndGroupCall = { viewModel.leaveGroupVideoCall() },
                     onToggleMute = { viewModel.toggleGroupCallMic() },
                     onToggleSpeaker = { viewModel.toggleGroupCallSpeaker() },
@@ -872,8 +1002,8 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
                 )
             }
 
-            // Draggable Floating Call Overlay (Picture-in-Picture) when minimized
-            if ((activeCall != null && isCallMinimizedToPip) || (activeGroupCall != null && isGroupCallMinimizedToPip)) {
+            // Draggable Floating Call Overlay (Picture-in-Picture) when minimized in-app (only when NOT in system PiP)
+            if (!isInPipMode && ((activeCall != null && isCallMinimizedToPip) || (activeGroupCall != null && isGroupCallMinimizedToPip))) {
                 FloatingCallPipOverlay(
                     activeCall = activeCall,
                     activeGroupCall = activeGroupCall,
@@ -959,7 +1089,11 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
         UserProfileDialog(
             userProfile = userProfile,
             localIp = localIp,
+            currentThemeMode = themeMode,
+            onThemeModeChange = { viewModel.setThemeMode(it) },
             onDismiss = { showProfileDialog = false },
+            blockedPeersCount = blockedPeers.size,
+            onOpenBlockedPeers = { showBlockedPeersDialog = true },
             onSaveProfile = { name, color, status, bio, userStatus, avatarUri ->
                 viewModel.updateProfile(name, color, status, bio, userStatus, avatarUri)
             },
@@ -969,12 +1103,21 @@ fun MainAppScreen(viewModel: MainViewModel = androidx.lifecycle.viewmodel.compos
         )
     }
 
-    // Create Room Dialog with Capacity
+    // Blocked Peers Dialog (S-02)
+    if (showBlockedPeersDialog) {
+        BlockedPeersDialog(
+            blockedPeers = blockedPeers,
+            onDismiss = { showBlockedPeersDialog = false },
+            onUnblock = { peerId -> viewModel.unblockPeer(peerId) }
+        )
+    }
+
+    // Create Room Dialog with Capacity and Password (S-01)
     if (showAddRoomDialog) {
         AddRoomDialog(
             onDismiss = { showAddRoomDialog = false },
-            onCreateRoom = { name, desc, capacity ->
-                viewModel.createRoom(name, desc, capacity)
+            onCreateRoom = { name, desc, capacity, password ->
+                viewModel.createRoom(name, desc, capacity, isPrivate = password != null, password = password)
             }
         )
     }
