@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>التقرير النهائي لمشروع LOCAL CONTACT - مقارنة التطوير في هندسة البرمجيات والتشفير</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700;800&family=Fira+Code:wght@400;500;600&display=swap');
+
+  :root {
+    --primary: #0f2b5c;
+    --primary-light: #1e40af;
+    --secondary: #0d9488;
+    --dark: #0f172a;
+    --gray-bg: #f8fafc;
+    --gray-border: #cbd5e1;
+    --gray-text: #475569;
+    --success: #059669;
+    --success-bg: #ecfdf5;
+    --warning: #d97706;
+    --warning-bg: #fffbeb;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --info: #0284c7;
+    --info-bg: #f0f9ff;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: 'Cairo', 'Tajawal', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--dark);
+    background-color: #ffffff;
+    line-height: 1.6;
+    font-size: 12px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  @page {
+    size: A4;
+    margin: 14mm 12mm 14mm 12mm;
+    @bottom-center {
+      content: "مشروع LOCAL CONTACT — تقرير التطوير الأكاديمي | إعداد الطالب: مشعل";
+      font-family: 'Cairo', sans-serif;
+      font-size: 8pt;
+      color: #94a3b8;
+    }
+  }
+
+  .page-break {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  .no-break {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  h1, h2, h3, h4 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* Document Header Box */
+  .doc-header {
+    border: 2px solid var(--primary-light);
+    border-radius: 10px;
+    background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    position: relative;
+  }
+
+  .doc-header::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 5px;
+    background: linear-gradient(90deg, #0f2b5c, #2563eb, #0d9488);
+    border-radius: 8px 8px 0 0;
+  }
+
+  .doc-header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--gray-border);
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+  }
+
+  .doc-header-title {
+    font-size: 20px;
+    font-weight: 900;
+    color: var(--primary);
+    line-height: 1.3;
+  }
+
+  .doc-header-subtitle {
+    font-size: 14px;
+    font-weight: 700;
+    color: #2563eb;
+    margin-top: 3px;
+  }
+
+  .header-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px 16px;
+    font-size: 11.5px;
+  }
+
+  .meta-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .meta-label {
+    font-weight: 700;
+    color: #475569;
+  }
+
+  .meta-value {
+    font-weight: 800;
+    color: var(--dark);
+  }
+
+  /* Headings */
+  h1.main-part-title {
+    font-size: 16px;
+    font-weight: 900;
+    color: #ffffff;
+    background: linear-gradient(90deg, #0f2b5c, #1e40af);
+    padding: 7px 14px;
+    border-radius: 6px;
+    margin: 22px 0 14px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  h2.sec-title {
+    font-size: 14.5px;
+    font-weight: 800;
+    color: var(--primary);
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 4px;
+    margin: 16px 0 8px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  h3.sub-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary-light);
+    margin: 12px 0 6px 0;
+  }
+
+  p {
+    margin-bottom: 8px;
+    text-align: justify;
+    color: #1e293b;
+    font-size: 11.5px;
+  }
+
+  ul, ol {
+    margin: 6px 18px 10px 0;
+    font-size: 11.5px;
+    color: #1e293b;
+  }
+
+  li {
+    margin-bottom: 4px;
+  }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 14px 0;
+    font-size: 10.5px;
+  }
+
+  th, td {
+    border: 1px solid #cbd5e1;
+    padding: 5px 8px;
+    text-align: right;
+    vertical-align: middle;
+  }
+
+  th {
+    background-color: #f1f5f9;
+    color: var(--primary);
+    font-weight: 800;
+    font-size: 10.5px;
+  }
+
+  tr:nth-child(even) {
+    background-color: #f8fafc;
+  }
+
+  /* Badges & Pills */
+  .badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 9.5px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .badge-success { background-color: var(--success-bg); color: var(--success); border: 1px solid #a7f3d0; }
+  .badge-warning { background-color: var(--warning-bg); color: var(--warning); border: 1px solid #fde68a; }
+  .badge-danger { background-color: var(--danger-bg); color: var(--danger); border: 1px solid #fecaca; }
+  .badge-info { background-color: var(--info-bg); color: var(--info); border: 1px solid #bae6fd; }
+
+  /* Callouts & Alert Boxes */
+  .callout {
+    border-right: 4px solid;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 10px 0;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+
+  .callout-info { background-color: var(--info-bg); border-color: var(--info); color: #0369a1; }
+  .callout-success { background-color: var(--success-bg); border-color: var(--success); color: #065f46; }
+  .callout-warning { background-color: var(--warning-bg); border-color: var(--warning); color: #92400e; }
+  .callout-danger { background-color: var(--danger-bg); border-color: var(--danger); color: #991b1b; }
+
+  .callout-title {
+    font-weight: 800;
+    font-size: 11.5px;
+    margin-bottom: 3px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .code-inline {
+    font-family: 'Fira Code', Consolas, monospace;
+    background-color: #f1f5f9;
+    color: #b91c1c;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    direction: ltr;
+    unicode-bidi: embed;
+    display: inline-block;
+  }
+
+  /* Flow / Box Styling */
+  .diagram-box {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 8px 0;
+    font-family: 'Fira Code', Consolas, monospace;
+    font-size: 10.5px;
+    line-height: 1.5;
+    direction: ltr;
+    text-align: left;
+    color: #0f172a;
+  }
+
+  .diagram-step {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 8px 0;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--primary);
+  }
+
+  .step-arrow {
+    color: #94a3b8;
+    font-size: 13px;
+  }
+
+  .ref-item {
+    font-size: 10px;
+    color: #475569;
+    margin-bottom: 4px;
+    line-height: 1.45;
+    direction: ltr;
+    text-align: left;
+  }
+</style>
+</head>
+<body>
+
+<!-- ترويسة التقرير الشامل -->
+<div class="doc-header">
+  <div class="doc-header-top">
+    <div>
+      <div class="doc-header-title">التقرير النهائي لمشروع LOCAL CONTACT</div>
+      <div class="doc-header-subtitle">مقارنة التطوير في هندسة البرمجيات والتشفير</div>
+    </div>
+    <div>
+      <span class="badge badge-success" style="font-size: 11px; padding: 4px 10px;">BUILD SUCCESSFUL</span>
+    </div>
+  </div>
+  <div class="header-meta-grid">
+    <div class="meta-item">
+      <span class="meta-label">إعداد الطالب:</span>
+      <span class="meta-value" style="color: #1e40af; font-size: 13px;">مشعل</span>
+    </div>
+    <div class="meta-item">
+      <span class="meta-label">حالة التقرير:</span>
+      <span class="meta-value">نسخة التسليم والمناقشة الأكاديمية الرسمية</span>
+    </div>
+    <div class="meta-item">
+      <span class="meta-label">ملف التطبيق:</span>
+      <span class="code-inline">app/build/outputs/apk/debug/app-debug.apk</span>
+    </div>
+    <div class="meta-item">
+      <span class="meta-label">نتائج الاختبارات:</span>
+      <span class="meta-value" style="color: var(--success);">33 اختباراً ناجحاً من أصل 33 (100% JVM)</span>
+    </div>
+  </div>
+</div>
+
+<!-- 1. الملخص التنفيذي -->
+<div class="section">
+  <h2 class="sec-title">1. الملخص التنفيذي</h2>
+  
+  <p>
+    مشروع <strong>LOCAL CONTACT</strong> هو تطبيق اتصال مباشر بين أجهزة Android عبر الشبكة المحلية، مثل Wi-Fi أو Hotspot، دون الاعتماد على خادم مركزي أو خدمة سحابية. قبل بدء عملية التحسين، كان التطبيق يحتوي على وظائف أساسية تعمل، لكنه كان يحتاج إلى تنظيم هندسي أوضح، وربط رسمي بين المتطلبات والكود والاختبارات، ومعالجة أعمق لمشكلة إدارة مفاتيح التشفير.
+  </p>
+
+  <p>
+    تم تطوير المشروع على مسارين متوازيين. المسار الأول هو <strong>هندسة البرمجيات</strong>، وشمل توثيق المتطلبات، وتحديد خط الأساس، وإنشاء مصفوفة تتبع، وفصل إدارة المفاتيح عن محرك التشفير، وإضافة اختبارات منظمة. المسار الثاني هو <strong>التشفير وأمن الاتصال</strong>، وشمل الحفاظ على AES-256-GCM، وإضافة مكونات ECDH و HKDF لمفاتيح الجلسات، وإضافة هوية جهاز عبر Android Keystore، وإضافة توقيع مرتبط بسياق المصافحة، وتثبيت هوية القرين عبر TOFU.
+  </p>
+
+  <p>
+    نجحت اختبارات JVM المسجلة في المشروع بنتيجة <strong>33 اختبارًا ناجحًا من أصل 33</strong>. كما تم بناء نسخة Debug بنجاح وإنشاء ملف APK. مع ذلك، لا يمثل ذلك تحققًا أمنيًا ميدانيًا كاملًا؛ إذ لم يُنفذ اختبار اتصال فعلي بين جهازين، ولم تُنفذ SAS، وما زالت Replay Protection الكاملة و File Integrity Checksum غير منفذتين، كما أن بعض مسارات الغرف والملفات والوسائط تستخدم المفتاح الشبكي القديم.
+  </p>
+
+  <div class="callout callout-warning">
+    <div class="callout-title">⚠️ النتيجة النهائية المعتمدة:</div>
+    أصبح المشروع <strong>جاهزًا للتسليم والمناقشة الأكاديمية بوصفه نسخة موثقة ومختبرة جزئيًا</strong>، لكنه لا يُقدم على أنه نظام أمني نهائي تم التحقق منه ميدانيًا في جميع مساراته.
+  </div>
+</div>
+
+<!-- الجزء الأول: هندسة البرمجيات -->
+<h1 class="main-part-title">الجزء الأول: هندسة البرمجيات</h1>
+
+<!-- 2. حالة المشروع قبل تطبيق مبادئ هندسة البرمجيات -->
+<div class="section">
+  <h2 class="sec-title">2. حالة المشروع قبل تطبيق مبادئ هندسة البرمجيات</h2>
+  
+  <p>
+    قبل التحسين، كان التركيز الأساسي على وجود الوظائف داخل التطبيق، مثل الاتصال المحلي، والرسائل، ونقل الملفات، والمكالمات، والتشفير. كان الكود يحتوي على مكونات مهمة، إلا أن الصورة الهندسية الكاملة لم تكن موحدة في وثائق رسمية.
+  </p>
+
+  <p>
+    كانت بعض المسؤوليات متقاربة داخل مكونات كبيرة، وخصوصًا محرك الاتصال ومحرك التشفير. كما لم يكن من السهل الإجابة بدقة عن الأسئلة التالية: ما المتطلبات الرسمية؟ أين يطبق كل متطلب؟ ما الاختبار الذي يثبت تنفيذه؟ هل الميزة منفذة بالكامل أم جزئيًا؟ وهل النتيجة مثبتة على JVM أم على جهاز Android حقيقي؟
+  </p>
+
+  <p>
+    لم يكن هذا يعني أن التطبيق لا يعمل، بل يعني أن قابلية الصيانة والتتبع والإثبات الأكاديمي كانت أضعف من المطلوب. كان من الممكن أن توجد وظيفة في الكود دون وجود وثيقة تربطها بمتطلب أو اختبار أو معيار قبول.
+  </p>
+</div>
+
+<!-- 3. ما تم تطبيقه في هندسة البرمجيات -->
+<div class="section">
+  <h2 class="sec-title">3. ما تم تطبيقه في هندسة البرمجيات</h2>
+
+  <h3 class="sub-title">3.1 وثيقة مواصفات المتطلبات SRS</h3>
+  <p>تم إنشاء الملف:</p>
+  <div style="margin: 4px 0;"><span class="code-inline">docs/SRS.md</span></div>
+  <p>
+    يمثل هذا الملف وثيقة <strong>Software Requirements Specification</strong>. وهو يصف المتطلبات الوظيفية وغير الوظيفية، وحالات الاستخدام، والحالات الحدية، ومعايير القبول، والقيود العامة للنظام. أصبح من الممكن ربط وظائف مثل الرسائل والملفات والاتصال المحلي والتشفير بمتطلبات مكتوبة بدل تركها موزعة في الشرح الشفهي أو داخل الكود فقط.
+  </p>
+
+  <h3 class="sub-title">3.2 وثيقة خط الأساس Baseline</h3>
+  <p>تم إنشاء الملف:</p>
+  <div style="margin: 4px 0;"><span class="code-inline">docs/Baseline.md</span></div>
+  <p>
+    يوثق هذا الملف حالة المشروع في نقطة مرجعية محددة. ويشرح البنية العامة، والمكونات، وتدفقات الشبكة، والتشفير الموجود، والاختبارات، والفجوات المعروفة. أهمية خط الأساس أنه يوضح الفرق بين حالة المشروع قبل التعديلات وحالته بعد التعديلات، ويمنع الخلط بين ميزة كانت موجودة مسبقًا وميزة تمت إضافتها خلال عملية التحسين.
+  </p>
+
+  <h3 class="sub-title">3.3 مصفوفة التتبع RTM</h3>
+  <p>تم إنشاء الملف:</p>
+  <div style="margin: 4px 0;"><span class="code-inline">docs/TraceabilityMatrix.md</span></div>
+  <p>
+    تربط مصفوفة التتبع بين المتطلب والكود والاختبار وحالة التحقق. أصبح المسار الهندسي للمعلومة كما يلي:
+  </p>
+  
+  <div class="diagram-step">
+    <span>Requirement (المتطلب)</span>
+    <span class="step-arrow">←</span>
+    <span>Source Code (الكود)</span>
+    <span class="step-arrow">←</span>
+    <span>Test Evidence (دليل الفحص)</span>
+    <span class="step-arrow">←</span>
+    <span>Current Status (الحالة)</span>
+  </div>
+
+  <p>وتوضح المصفوفة الفرق بين الحالات التالية:</p>
+  <ul>
+    <li>منفذ ومختبر على JVM.</li>
+    <li>مدمج في الكود لكنه غير مختبر بين جهازين.</li>
+    <li>منفذ جزئيًا.</li>
+    <li>غير منفذ.</li>
+    <li>مقترح للتحسين المستقبلي.</li>
+  </ul>
+  <p>
+    هذه الدقة مهمة في المناقشة لأنها تمنع تحويل وجود كود أو اختبار جزئي إلى ادعاء بأن النظام الكامل تم التحقق منه.
+  </p>
+
+  <h3 class="sub-title">3.4 فصل إدارة المفاتيح عبر KeyProvider</h3>
+  <p>
+    قبل التحسين، كان <span class="code-inline">LocalCryptoEngine</span> مرتبطًا مباشرة بمنطق إنشاء المفتاح المشتق من عبارة المرور. تم إنشاء واجهة:
+  </p>
+  <div style="margin: 4px 0;"><span class="code-inline">KeyProvider</span></div>
+  <p>وتطبيق يحافظ على السلوك القديم:</p>
+  <div style="margin: 4px 0;"><span class="code-inline">LegacyStaticKeyProvider</span></div>
+  <p>أصبح التدفق المعماري كالتالي:</p>
+
+  <div class="diagram-box">
+LocalCryptoEngine
+        ↓
+KeyProvider
+        ↓
+LegacyStaticKeyProvider
+        ↓
+PBKDF2
+        ↓
+AES Network Key
+  </div>
+
+  <p>
+    هذا التغيير لم يلغِ المفتاح الثابت في المرحلة الأولى، لكنه فصل المسؤولية وأصبح من الممكن إضافة مزود مفاتيح آخر لاحقًا دون إعادة كتابة كل دوال التشفير. كما حافظت الاختبارات الحالية على سلوك التشفير القديم.
+  </p>
+
+  <h3 class="sub-title">3.5 تنظيم الاختبارات</h3>
+  <p>تم تنظيم اختبارات مستقلة لمكونات مختلفة، منها:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 35%;">مجموعة الاختبارات</th>
+        <th style="width: 50%;">الغرض</th>
+        <th style="width: 15%; text-align: center;">النتيجة المسجلة</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="code-inline">LocalCryptoEngineTest</span></td>
+        <td>اختبار AES-GCM، التلاعب، المفتاح الخاطئ، JSON والكتل</td>
+        <td style="text-align: center;"><span class="badge badge-success">10/10</span></td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">EcdhEngineTest</span></td>
+        <td>اختبار اتفاق الطرفين على السر المشترك واشتقاق مفاتيح الجلسات</td>
+        <td style="text-align: center;"><span class="badge badge-success">8/8</span></td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">PeerSessionKeyManagerTest</span></td>
+        <td>اختبار إدارة مفاتيح الجلسات والحالات</td>
+        <td style="text-align: center;"><span class="badge badge-success">4/4</span></td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">HandshakeHardeningTest</span></td>
+        <td>اختبار التوقيع المرتبط بالسياق و TOFU ومنع بعض حالات التراجع</td>
+        <td style="text-align: center;"><span class="badge badge-success">8/8</span></td>
+      </tr>
+      <tr>
+        <td>اختبارات المشروع الأخرى</td>
+        <td>اختبارات إضافية موجودة في المشروع</td>
+        <td style="text-align: center;"><span class="badge badge-success">3/3</span></td>
+      </tr>
+      <tr style="background-color: #ecfdf5; font-weight: 800;">
+        <td colspan="2">إجمالي النتيجة المسجلة:</td>
+        <td style="text-align: center;"><span class="badge badge-success" style="font-size: 10.5px;">33 / 33</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="diagram-box" style="margin-top: 4px;">
+33 tests executed
+33 passed
+0 failed
+0 skipped
+  </div>
+  <p style="margin-top: 4px; font-size: 11px; color: var(--gray-text);">
+    هذه النتيجة تخص اختبارات JVM التي تم تشغيلها، ولا تعني أن جميع متطلبات التطبيق أو جميع مسارات الشبكة تم اختبارها.
+  </p>
+</div>
+
+<!-- 4. مقارنة هندسة البرمجيات قبل وبعد -->
+<div class="section">
+  <h2 class="sec-title">4. مقارنة هندسة البرمجيات قبل وبعد</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 20%;">المجال</th>
+        <th style="width: 38%;">قبل التحسين</th>
+        <th style="width: 42%;">بعد التحسين</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>المتطلبات</strong></td>
+        <td>موزعة وغير مرتبطة دائمًا بالكود والاختبار</td>
+        <td>موثقة في <span class="code-inline">SRS.md</span></td>
+      </tr>
+      <tr>
+        <td><strong>الحالة المرجعية</strong></td>
+        <td>غير موحدة</td>
+        <td>موثقة في <span class="code-inline">Baseline.md</span></td>
+      </tr>
+      <tr>
+        <td><strong>تتبع المتطلبات</strong></td>
+        <td>محدود أو غير صريح</td>
+        <td>موثق في <span class="code-inline">TraceabilityMatrix.md</span></td>
+      </tr>
+      <tr>
+        <td><strong>إدارة المفاتيح</strong></td>
+        <td>مرتبطة مباشرة بمحرك التشفير</td>
+        <td>معزولة خلف <span class="code-inline">KeyProvider</span></td>
+      </tr>
+      <tr>
+        <td><strong>الاختبارات</strong></td>
+        <td>لم تكن تغطي الصورة الأكاديمية بوضوح</td>
+        <td>اختبارات منفصلة للتشفير و ECDH و Handshake</td>
+      </tr>
+      <tr>
+        <td><strong>تقييم الإنجاز</strong></td>
+        <td>قد يخلط بين وجود الكود والتحقق الفعلي</td>
+        <td>حالات دقيقة: JVM Tested، Pending، Missing</td>
+      </tr>
+      <tr>
+        <td><strong>إدارة المخاطر</strong></td>
+        <td>غير موثقة بصورة كافية</td>
+        <td>مخاطر MITM و Downgrade و Replay موثقة</td>
+      </tr>
+      <tr>
+        <td><strong>قابلية التغيير</strong></td>
+        <td>إضافة Keystore أو Session Keys قد تتطلب تعديلًا واسعًا</td>
+        <td>يمكن إضافة مزودات مفاتيح ومكونات مستقلة تدريجيًا</td>
+      </tr>
+      <tr>
+        <td><strong>الأدلة الأكاديمية</strong></td>
+        <td>تعتمد على الشرح الشفهي</td>
+        <td>وثائق، اختبارات، ومسارات تتبع</td>
+      </tr>
+      <tr>
+        <td><strong>قابلية المناقشة</strong></td>
+        <td>صعبة الإثبات</td>
+        <td>يمكن شرح القرار والدليل والحدود بوضوح</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- 5. الأثر الهندسي للتحسين -->
+<div class="section">
+  <h2 class="sec-title">5. الأثر الهندسي للتحسين</h2>
+  <p>
+    لم يكن الهدف من هندسة البرمجيات مجرد إضافة ملفات توثيق، بل تحويل المشروع من مجموعة وظائف تعمل إلى نظام يمكن تفسيره وإدارته وتقييمه. أصبحت كل نتيجة مهمة مرتبطة بدليل. فإذا كانت الميزة مختبرة على JVM، نذكر ذلك. وإذا كانت مدمجة في الكود دون اختبار ميداني، نذكر ذلك. وإذا كانت غير منفذة، نذكر أنها غير منفذة بدل تقديمها على أنها مكتملة.
+  </p>
+  <p>
+    هذا الأسلوب يرفع جودة المشروع أمام أستاذ هندسة البرمجيات، لأنه يوضح دورة المتطلب والتصميم والتنفيذ والاختبار والتتبع وإدارة المخاطر.
+  </p>
+</div>
+
+<!-- الجزء الثاني: التشفير وأمن الاتصال -->
+<h1 class="main-part-title">الجزء الثاني: التشفير وأمن الاتصال</h1>
+
+<!-- 6. حالة التشفير قبل التحسين -->
+<div class="section">
+  <h2 class="sec-title">6. حالة التشفير قبل التحسين</h2>
+  <p>كان التطبيق يستخدم تشفيرًا متماثلًا من النوع:</p>
+  <div style="margin: 4px 0;"><span class="code-inline">AES/GCM/NoPadding</span></div>
+  <p>بحجم مفتاح:</p>
+  <div style="margin: 4px 0;"><span class="code-inline">AES-256 = 256 bits</span></div>
+  <p>
+    وكان المفتاح مشتقًا من عبارة مرور ثابتة داخل الكود، مع استخدام PBKDF2-HMAC-SHA256 وملح ثابت وفق التنفيذ الموجود في المشروع.
+  </p>
+  <p>كان التدفق الأمني القديم كما يلي:</p>
+
+  <div class="diagram-box">
+DEFAULT_PASSPHRASE
+        ↓
+PBKDF2WithHmacSHA256
+        ↓
+مفتاح ثابت مشترك
+        ↓
+AES-256-GCM
+        ↓
+الرسائل وبعض بيانات الشبكة
+  </div>
+
+  <p>
+    كانت الحزم تستخدم Nonce عشوائيًا بطول 12 بايت في بعض التدفقات. وكانت كتل الملفات تستخدم Nonce مشتقًا من معرف الملف ورقم الكتلة ومعرف الجلسة حسب التنفيذ الموجود.
+  </p>
+</div>
+
+<!-- 7. مشكلات التصميم القديم -->
+<div class="section">
+  <h2 class="sec-title">7. مشكلات التصميم القديم</h2>
+  <p>
+    كان المفتاح الثابت المشترك يمثل نقطة ضعف معمارية. إذا تم استخراج عبارة المرور من التطبيق أو تحليل ملف APK، يستطيع المهاجم اشتقاق المفتاح نفسه المستخدم لدى الأجهزة والجلسات.
+  </p>
+  <p>
+    كما لم يكن هناك تبادل مفاتيح ديناميكي بين الأجهزة. ولم تكن هناك هوية تشفيرية مستقلة لكل جهاز. ولم تكن هناك حماية كاملة من إعادة بث حزمة صحيحة قديمة. كما لم يكن هناك تحقق SHA-256 للملف كاملًا بعد اكتمال نقله.
+  </p>
+  <p>
+    يجب التمييز بين قوة AES-GCM كخوارزمية وبين طريقة إدارة المفتاح. قد تكون الخوارزمية قوية، لكن استخدام مفتاح ثابت مكشوف يضعف النظام ككل.
+  </p>
+</div>
+
+<!-- 8. ما تم تطبيقه في التشفير -->
+<div class="section">
+  <h2 class="sec-title">8. ما تم تطبيقه في التشفير</h2>
+
+  <h3 class="sub-title">8.1 الحفاظ على AES-256-GCM</h3>
+  <p>
+    لم يتم استبدال AES-GCM. بقيت الخوارزمية الأساسية لتشفير البيانات لأنها توفر السرية وسلامة البيانات عبر Authentication Tag.
+  </p>
+  <p>حسب التنفيذ الموثق، يستخدم النظام:</p>
+  <ul>
+    <li>مفتاح AES بطول 256 بت.</li>
+    <li>GCM Authentication Tag بطول 128 بت.</li>
+    <li>Nonce بطول 12 بايت في مسارات الحزم.</li>
+    <li>رفض فك التشفير عند تعديل النص المشفر أو وسم المصادقة.</li>
+  </ul>
+
+  <h3 class="sub-title">8.2 اختبارات محرك التشفير</h3>
+  <p>
+    اختبارات <span class="code-inline">LocalCryptoEngineTest</span> تحققت من السلوك الخوارزمي لمحرك التشفير، بما في ذلك:
+  </p>
+  <ul>
+    <li>نجاح التشفير ثم فك التشفير.</li>
+    <li>رفض المفتاح الخاطئ.</li>
+    <li>رفض النص المشفر بعد التلاعب.</li>
+    <li>رفض Authentication Tag بعد التلاعب.</li>
+    <li>تشفير وفك تشفير JSON.</li>
+    <li>التعامل مع النصوص العربية و UTF-8.</li>
+    <li>اشتقاق Nonce للكتل.</li>
+    <li>تشفير وفك كتل البيانات.</li>
+    <li>بعض الحالات الحدية.</li>
+  </ul>
+  <p style="font-size: 11px; color: var(--gray-text);">
+    نجاح هذه الاختبارات يثبت صحة السلوك الذي تختبره، لكنه لا يثبت أمان النظام الشبكي الكامل.
+  </p>
+
+  <h3 class="sub-title">8.3 ECDH و HKDF لمفاتيح الجلسات</h3>
+  <p>
+    تم إنشاء مكون ECDH لتوليد مفاتيح مؤقتة وحساب Shared Secret بين طرفين، ثم اشتقاق Session Key باستخدام HKDF-SHA256 وفق التصميم المنفذ.
+  </p>
+  <p>التدفق المنطقي هو:</p>
+
+  <div class="diagram-box">
+Ephemeral Private Key A + Peer Public Key B
+        ↓
+Shared Secret A
+        ↓
+HKDF-SHA256 + Session Context
+        ↓
+Session Key A
+  </div>
+
+  <p>ويحسب الطرف الآخر السر نفسه بطريقة عكسية:</p>
+
+  <div class="diagram-box">
+Ephemeral Private Key B + Peer Public Key A
+        ↓
+Shared Secret B
+        ↓
+HKDF-SHA256 + نفس السياق
+        ↓
+Session Key B
+  </div>
+
+  <p>
+    ينبغي اعتماد خوارزمية المنحنى الفعلية من الكود النهائي عند التسليم. التقارير المرحلية أشارت إلى P-256 في بعض المراحل، بينما وردت إشارة إلى X25519 في ملخص لاحق؛ لذلك يجب عدم ذكر X25519 في المناقشة إلا إذا كان ملف <span class="code-inline">EcdhEngine.kt</span> يثبت ذلك صراحة. الثابت المؤكد من الاختبارات هو وجود مكون ECDH ونجاح اختبارات اتفاق السر واشتقاق مفتاح الجلسة.
+  </p>
+
+  <h3 class="sub-title">8.4 Android Keystore وهوية الجهاز</h3>
+  <p>
+    تم إنشاء <span class="code-inline">KeystoreIdentityManager</span> لاستخدام Android Keystore في إدارة مفتاح هوية الجهاز. الهدف هو الاحتفاظ بالمفتاح الخاص داخل مخزن المفاتيح وعدم وضعه في Room أو ملف عادي أو SharedPreferences.
+  </p>
+  <p>
+    يستخدم مفتاح الهوية للتوقيع والتحقق في المصافحة المستقبلية، وليس بديلًا مباشرًا عن AES-GCM لتشفير كل محتوى التطبيق.
+  </p>
+  <p>
+    يجب وصف الحماية بدقة. Android Keystore يوفر حماية أقوى، وقد يعتمد على TEE أو StrongBox حسب الجهاز، لكنه ليس ضمانًا مطلقًا ضد كل الهجمات. كما أن اختبارات Android Instrumented لم تُنفذ على جهاز أو محاكي حسب الحالة المسجلة.
+  </p>
+
+  <h3 class="sub-title">8.5 Context-Bound Signature</h3>
+  <p>
+    في التصميم الأولي كان التوقيع يغطي المفتاح المؤقت فقط. تم تحسين ذلك ببناء بيانات توقيع موحدة وحتمية تشمل سياق المصافحة، مثل:
+  </p>
+  <ul>
+    <li>إصدار البروتوكول.</li>
+    <li>معرف المرسل.</li>
+    <li>معرف المستقبل.</li>
+    <li>معرف الجلسة.</li>
+    <li>الطابع الزمني.</li>
+    <li>المفتاح العام المؤقت.</li>
+  </ul>
+  <p>
+    يمنع ذلك إعادة استخدام التوقيع بسهولة في سياق مختلف، لأن تغيير أحد الحقول يؤدي إلى فشل التحقق. ولا ينبغي الخلط بين هذا الإجراء وبين Replay Protection الكاملة.
+  </p>
+
+  <h3 class="sub-title">8.6 TOFU لتثبيت هوية القرين</h3>
+  <p>
+    تم إضافة <span class="code-inline">PeerTrustStore</span> لتخزين بصمة مفتاح هوية القرين. في أول اتصال تُحفظ البصمة وفق سياسة Trust On First Use. في الاتصالات اللاحقة تُقبل البصمة نفسها، ويُرفض تغيرها باعتباره تغيرًا في الهوية.
+  </p>
+  <p>
+    TOFU يحمي الاتصالات اللاحقة بعد تسجيل البصمة، لكنه لا يحمي أول اتصال بالكامل من MITM إذا لم يقارن المستخدم SAS أو بصمة عبر قناة خارجية. لذلك حالة MITM Protection هي <strong>جزئية</strong> وليست كاملة.
+  </p>
+
+  <h3 class="sub-title">8.7 Handshake و Session Key Scope</h3>
+  <p>
+    تم دمج رسائل مصافحة في <span class="code-inline">LocalP2PEngine</span> وفق التقارير المرحلية، مع رسائل بدء ورد وتأكيد. ويستخدم Direct Chat مفتاح جلسة عند اكتمال المسار المناسب.
+  </p>
+  <p>لكن نطاق استخدام Session Key ليس شاملًا لكل البيانات. الحالة الموثقة هي:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 30%;">نوع البيانات</th>
+        <th style="width: 35%;">المفتاح الحالي</th>
+        <th style="width: 35%;">حالة الربط بالجلسة</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Discovery</td>
+        <td><span class="code-inline">networkKey</span></td>
+        <td>غير مرتبط بجلسة</td>
+      </tr>
+      <tr>
+        <td>Direct Chat</td>
+        <td><span class="code-inline">sessionKey</span> عند توفره، وإلا المسار القديم حيث ينطبق</td>
+        <td><span class="badge badge-warning">جزئي</span></td>
+      </tr>
+      <tr>
+        <td>Room Chat</td>
+        <td><span class="code-inline">networkKey</span></td>
+        <td>غير مرتبط بجلسة</td>
+      </tr>
+      <tr>
+        <td>File Transfer</td>
+        <td><span class="code-inline">networkKey</span></td>
+        <td>غير مرتبط بجلسة</td>
+      </tr>
+      <tr>
+        <td>Audio</td>
+        <td><span class="code-inline">networkKey</span></td>
+        <td>غير مرتبط بجلسة</td>
+      </tr>
+      <tr>
+        <td>Video</td>
+        <td><span class="code-inline">networkKey</span></td>
+        <td>غير مرتبط بجلسة</td>
+      </tr>
+      <tr>
+        <td>Screen Sharing</td>
+        <td><span class="code-inline">networkKey</span></td>
+        <td>غير مرتبط بجلسة</td>
+      </tr>
+      <tr>
+        <td>Handshake</td>
+        <td>مسار مختلط أو Legacy bootstrap</td>
+        <td><span class="badge badge-warning">جزئي</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>لهذا السبب لا يجوز وصف النظام بأنه يستخدم Session Key لكل أنواع البيانات.</p>
+</div>
+
+<!-- 9. مقارنة التشفير قبل وبعد -->
+<div class="section">
+  <h2 class="sec-title">9. مقارنة التشفير قبل وبعد</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 25%;">الجانب</th>
+        <th style="width: 35%;">قبل التحسين</th>
+        <th style="width: 40%;">بعد التحسين</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>تشفير البيانات</strong></td>
+        <td>AES-256-GCM</td>
+        <td>AES-256-GCM ما زال الأساس</td>
+      </tr>
+      <tr>
+        <td><strong>مصدر المفتاح</strong></td>
+        <td>عبارة مرور ثابتة داخل التطبيق</td>
+        <td>ECDH / HKDF لمكونات مفاتيح الجلسات، مع بقاء Legacy في بعض المسارات</td>
+      </tr>
+      <tr>
+        <td><strong>مفتاح عالمي مشترك</strong></td>
+        <td>مستخدم في معظم المسارات</td>
+        <td>ما زال مستخدمًا في Discovery والغرف والملفات والوسائط حسب الحالة الموثقة</td>
+      </tr>
+      <tr>
+        <td><strong>ECDH</strong></td>
+        <td>غير موجود</td>
+        <td>مكون منفذ ومختبر على JVM</td>
+      </tr>
+      <tr>
+        <td><strong>HKDF</strong></td>
+        <td>غير موجود في التصميم القديم</td>
+        <td>مستخدم لاشتقاق Session Keys حسب المكون المنفذ</td>
+      </tr>
+      <tr>
+        <td><strong>مفتاح لكل جلسة</strong></td>
+        <td>غير موجود</td>
+        <td>موجود في مسار Direct Chat والمكونات المخصصة للجلسات</td>
+      </tr>
+      <tr>
+        <td><strong>هوية الجهاز</strong></td>
+        <td>غير موجودة</td>
+        <td>Android Keystore و ECDSA حسب المكون المنفذ</td>
+      </tr>
+      <tr>
+        <td><strong>توقيع المصافحة</strong></td>
+        <td>غير موجود أو غير مرتبط بالسياق</td>
+        <td>Context-Bound Signature</td>
+      </tr>
+      <tr>
+        <td><strong>تثبيت هوية القرين</strong></td>
+        <td>غير موجود</td>
+        <td>TOFU</td>
+      </tr>
+      <tr>
+        <td><strong>حماية MITM</strong></td>
+        <td>غير موجودة</td>
+        <td>جزئية؛ SAS غير منفذة</td>
+      </tr>
+      <tr>
+        <td><strong>حماية Downgrade</strong></td>
+        <td>غير موجودة</td>
+        <td>جزئية؛ بعض المسارات تحتاج تدقيقًا إضافيًا</td>
+      </tr>
+      <tr>
+        <td><strong>Replay Protection</strong></td>
+        <td>غير موجودة</td>
+        <td>ما زالت غير مكتملة</td>
+      </tr>
+      <tr>
+        <td><strong>File Integrity Checksum</strong></td>
+        <td>غير موجود</td>
+        <td>ما زال غير منفذ</td>
+      </tr>
+      <tr>
+        <td><strong>اختبار ميداني بين جهازين</strong></td>
+        <td>غير موجود</td>
+        <td>ما زال غير منفذ</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- 10. ما الذي تثبته نتائج الاختبار؟ -->
+<div class="section">
+  <h2 class="sec-title">10. ما الذي تثبته نتائج الاختبار؟</h2>
+  <p>
+    تثبت نتيجة <span class="code-inline">33/33</span> أن الاختبارات التي تم تشغيلها نجحت على بيئة JVM. وتشمل النتيجة اختبارات AES-GCM و ECDH وإدارة الجلسات و Hardening وبعض اختبارات المشروع الأخرى.
+  </p>
+  <p>لا تثبت النتيجة وحدها أن:</p>
+  <ul>
+    <li>الاتصال بين جهازين فعليين يعمل عبر Wi-Fi.</li>
+    <li>Android Keystore تم التحقق منه على جهاز.</li>
+    <li>MITM مستحيل.</li>
+    <li>Replay Protection مكتملة.</li>
+    <li>الملفات والصوت والفيديو والغرف تستخدم Session Keys.</li>
+    <li>File Integrity Checksum منفذة.</li>
+    <li>كل المتطلبات الوظيفية من FR-01 إلى FR-31 مختبرة.</li>
+  </ul>
+</div>
+
+<!-- 11. ما تبقى خارج التنفيذ الكامل -->
+<div class="section">
+  <h2 class="sec-title">11. ما تبقى خارج التنفيذ الكامل</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 45%;">الميزة</th>
+        <th style="width: 55%;">الحالة الحالية</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>SAS للتحقق اليدوي من الهوية</td>
+        <td><span class="badge badge-danger">غير منفذة</span></td>
+      </tr>
+      <tr>
+        <td>Replay Protection حقيقية</td>
+        <td><span class="badge badge-danger">غير منفذة</span>؛ لا يوجد sequence number وسجل رفض للمكرر</td>
+      </tr>
+      <tr>
+        <td>SHA-256 للملف الكامل</td>
+        <td><span class="badge badge-danger">غير منفذ</span></td>
+      </tr>
+      <tr>
+        <td>تشفير الملفات بمفتاح جلسة</td>
+        <td><span class="badge badge-warning">غير مكتمل</span>، وما زال المسار القديم مستخدمًا حسب التقرير</td>
+      </tr>
+      <tr>
+        <td>تشفير الصوت والفيديو بمفتاح جلسة</td>
+        <td><span class="badge badge-warning">غير مكتمل</span></td>
+      </tr>
+      <tr>
+        <td>Group Key للغرف</td>
+        <td><span class="badge badge-danger">غير منفذ</span></td>
+      </tr>
+      <tr>
+        <td>اختبار Android Instrumented</td>
+        <td><span class="badge badge-danger">غير منفذ</span> لعدم توفر جهاز أو محاكي</td>
+      </tr>
+      <tr>
+        <td>اختبار جهازين فعليين</td>
+        <td><span class="badge badge-danger">غير منفذ</span></td>
+      </tr>
+      <tr>
+        <td>تغطية JaCoCo كاملة</td>
+        <td><span class="badge badge-info">غير مقاسة</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- الجزء الثالث: ما تم تسليمه فعليًا -->
+<h1 class="main-part-title">الجزء الثالث: ما تم تسليمه فعليًا</h1>
+
+<!-- 12. مخرجات البناء -->
+<div class="section">
+  <h2 class="sec-title">12. مخرجات البناء</h2>
+  <p>تم إنشاء نسخة Debug بنجاح:</p>
+  <div class="diagram-box">
+BUILD SUCCESSFUL
+  </div>
+  <p>ومسار ملف APK هو:</p>
+  <div style="margin: 4px 0;"><span class="code-inline">app/build/outputs/apk/debug/app-debug.apk</span></div>
+  <p>
+    تم إنشاء <span class="code-inline">debug.keystore</span> محليًا لتوقيع نسخة Debug. هذا الملف مفتاح تطوير محلي، وليس مفتاح توقيع Production، ولا ينبغي إضافته إلى مستودع Git العام.
+  </p>
+</div>
+
+<!-- 13. الملفات والوثائق الرئيسية -->
+<div class="section">
+  <h2 class="sec-title">13. الملفات والوثائق الرئيسية</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 35%;">الملف أو المكون</th>
+        <th style="width: 65%;">الغرض</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="code-inline">docs/SRS.md</span></td>
+        <td>مواصفات المتطلبات</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">docs/Baseline.md</span></td>
+        <td>خط أساس النظام</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">docs/TraceabilityMatrix.md</span></td>
+        <td>ربط المتطلبات بالكود والاختبارات</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">KeyProvider.kt</span></td>
+        <td>تجريد إدارة المفاتيح</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">LegacyStaticKeyProvider</span></td>
+        <td>الحفاظ على توافق المفتاح القديم مؤقتًا</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">KeystoreIdentityManager.kt</span></td>
+        <td>هوية الجهاز والتوقيع عبر Android Keystore</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">EcdhEngine.kt</span></td>
+        <td>ECDH والسر المشترك واشتقاق الجلسة</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">PeerSessionKeyManager.kt</span></td>
+        <td>إدارة مفاتيح وحالات جلسات الأقران</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">HandshakeCryptoUtils.kt</span></td>
+        <td>بناء بيانات التوقيع المرتبطة بسياق المصافحة</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">PeerTrustStore.kt</span></td>
+        <td>تخزين بصمة هوية القرين وفق TOFU</td>
+      </tr>
+      <tr>
+        <td><span class="code-inline">LocalP2PEngine.kt</span></td>
+        <td>دمج الاتصال والمصافحة في كود P2P</td>
+      </tr>
+      <tr>
+        <td>ملفات الاختبارات</td>
+        <td>إثبات سلوك المكونات المحددة</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- 14. الخلاصة النهائية -->
+<div class="section">
+  <h2 class="sec-title">14. الخلاصة النهائية</h2>
+  <p>
+    قبل تطبيق مبادئ هندسة البرمجيات، كان المشروع أقرب إلى تطبيق يعمل وظيفيًا مع تشفير قوي على مستوى الخوارزمية، لكنه كان يفتقر إلى تنظيم المتطلبات والتتبع وإدارة المفاتيح الديناميكية والإثبات الميداني.
+  </p>
+  <p>
+    بعد التحسين، أصبح المشروع أكثر تنظيمًا وقابلية للصيانة والمناقشة. تم إنشاء وثائق رسمية، وفصل إدارة المفاتيح، وإضافة مكونات ECDH و HKDF و Android Keystore و TOFU و Context-Bound Signature، وتشغيل اختبارات JVM، وبناء APK قابل للتثبيت.
+  </p>
+  <p>
+    التحسين الأمني لا يعني أن كل مسارات التطبيق أصبحت محمية بمفتاح جلسة. ما زالت بعض المسارات تستخدم المفتاح الشبكي القديم، وما زالت Replay Protection و File Integrity Checksum و SAS والتحقق بين جهازين غير منفذة أو غير مثبتة. توثيق هذه الحدود هو جزء من هندسة البرمجيات الجيدة وليس نقطة ضعف في التقرير.
+  </p>
+
+  <div class="callout callout-info">
+    <div class="callout-title">📌 الحكم النهائي:</div>
+    المشروع مناسب للتسليم والمناقشة الأكاديمية، بشرط تقديمه على أنه نظام P2P موثق ومختبر على مستوى المكونات، مع وجود Handshake ومكونات تشفير متقدمة مدمجة، وليس على أنه نظام أمني نهائي تم التحقق منه ميدانيًا في جميع أنواع الاتصال.
+  </div>
+</div>
+
+<!-- 15. صياغة جاهزة للمناقشة -->
+<div class="section">
+  <h2 class="sec-title">15. صياغة جاهزة للمناقشة</h2>
+
+  <div class="callout callout-success" style="font-size: 11.5px; line-height: 1.75;">
+    <div class="callout-title">🎙️ النص الشفوي الجاهز للإلقاء أمام لجنة المناقشة:</div>
+    "قبل التحسين كان التطبيق يعمل وظيفيًا، لكنه كان يعتمد على مفتاح تشفير ثابت مشترك، وكانت المتطلبات والاختبارات والفجوات غير مرتبطة بمصفوفة تتبع واضحة. بعد تطبيق مبادئ هندسة البرمجيات أنشأنا SRS و Baseline و Traceability Matrix، وفصلنا إدارة المفاتيح عبر KeyProvider، وأضفنا اختبارات مستقلة للمكونات. ومن ناحية التشفير حافظنا على AES-256-GCM، وأضفنا مكونات ECDH و HKDF لمفاتيح الجلسات، و Android Keystore لهوية الجهاز، و Context-Bound Signatures و TOFU. نجحت اختبارات JVM المسجلة بنتيجة 33 من 33، وتم بناء APK بنجاح. ومع ذلك، لم يتم اختبار جهازين فعليين، و SAS و Replay Protection الكاملة و File Integrity Checksum غير منفذة، وبعض مسارات الغرف والملفات والوسائط ما زالت تستخدم المفتاح القديم. لذلك نفرق في التقرير بين المكون المنفذ، والمكون المختبر، والمكون المدمج غير المختبر ميدانيًا، والمكون غير المنفذ."
+  </div>
+</div>
+
+<!-- References -->
+<div class="section" style="margin-top: 20px;">
+  <h2 class="sec-title">References</h2>
+  <div class="ref-item"><strong>[1]</strong> <a href="https://github.com/AWNO-1/LOCAL-CONTACT-/commit/71111825645c2b3c6a926f739455c4ffda3c0963">LOCAL CONTACT project commit reviewed for the baseline analysis</a></div>
+  <div class="ref-item"><strong>[2]</strong> <a href="https://www.rfc-editor.org/rfc/rfc5869">RFC 5869: HMAC-based Extract-and-Expand Key Derivation Function (HKDF)</a></div>
+  <div class="ref-item"><strong>[3]</strong> <a href="https://csrc.nist.gov/pubs/fips/197/final">NIST FIPS 197: Advanced Encryption Standard (AES)</a></div>
+  <div class="ref-item"><strong>[4]</strong> <a href="https://developer.android.com/privacy-and-security/keystore">Android Keystore system documentation</a></div>
+</div>
+
+</body>
+</html>
