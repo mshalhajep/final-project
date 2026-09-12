@@ -5,10 +5,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.SecretKey
-import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.PBEKeySpec
-import javax.crypto.spec.SecretKeySpec
 
 /**
  * End-to-end payload protection engine for every byte leaving or entering the device.
@@ -17,73 +14,36 @@ import javax.crypto.spec.SecretKeySpec
  * fresh 12-byte random nonce per packet. Any payload failing AEAD authentication is
  * discarded by the caller — tampered or foreign packets never reach the decoders.
  *
- * The network key is derived with PBKDF2-HmacSHA256 from a shared pairing passphrase.
- * All devices running LocalConnect on the same offline network share the default
- * passphrase; a future pairing flow can override it via [setNetworkPassphrase].
+ * Key management is delegated to a [KeyProvider] abstraction (defaults to [LegacyStaticKeyProvider]),
+ * decoupling cipher operations from key derivation and paving the way for hardware-backed keys and ECDH.
  */
 object LocalCryptoEngine {
 
     private const val TAG = "LocalCryptoEngine"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
-    private const val KEY_ALGORITHM = "AES"
-    private const val KEY_BITS = 256
     private const val GCM_TAG_BITS = 128
     const val NONCE_SIZE = 12
 
-    private const val PBKDF2_ITERATIONS = 12000
-    private const val KEY_SALT = "LocalConnect::P2P::NetworkSalt::v1"
+    /** Key provider abstraction delegating key management and derivation. */
+    @Volatile
+    var keyProvider: KeyProvider = LegacyStaticKeyProvider()
 
-    /** Shared pairing passphrase used to derive the AES-256 network session key. */
-    private const val DEFAULT_PASSPHRASE = "LocalConnect-Offline-Pairing-Key-v1"
-
-    // WARNING: This is a default key for development. In production, generate a unique key per network.
-    private val defaultKeyBytes = ByteArray(32) { 0 }
-    private var _networkKey: ByteArray = defaultKeyBytes
-
+    /** Updates the raw network key via the active [KeyProvider]. */
     fun updateNetworkKey(newKey: ByteArray) {
-        require(newKey.size == 32) { "Key must be 256 bits (32 bytes)" }
-        _networkKey = newKey.copyOf()
+        keyProvider.updateNetworkKey(newKey)
     }
 
-    @Volatile
-    private var networkPassphrase: String = DEFAULT_PASSPHRASE
-
-    @Volatile
-    private var cachedKey: SecretKey? = null
-
-    private val secureRandom = SecureRandom()
-
-    /** Overrides the pairing passphrase and invalidates the cached derived key. */
-    @Synchronized
+    /** Overrides the pairing passphrase via the active [KeyProvider]. */
     fun setNetworkPassphrase(passphrase: String) {
-        if (passphrase.isBlank() || passphrase == networkPassphrase) return
-        networkPassphrase = passphrase
-        cachedKey = null
+        keyProvider.setNetworkPassphrase(passphrase)
         Log.i(TAG, "Network pairing passphrase updated — session key re-derived")
     }
 
-    /** Lazily derived AES-256 network key (PBKDF2-HmacSHA256, salted, 12k iterations). */
+    /** Active AES-256 network key retrieved from the current [KeyProvider]. */
     val networkKey: SecretKey
-        get() {
-            if (!_networkKey.contentEquals(defaultKeyBytes)) {
-                return SecretKeySpec(_networkKey, KEY_ALGORITHM)
-            }
-            cachedKey?.let { return it }
-            return synchronized(this) {
-                cachedKey ?: deriveKey(networkPassphrase).also { cachedKey = it }
-            }
-        }
+        get() = keyProvider.getNetworkKey()
 
-    private fun deriveKey(passphrase: String): SecretKey {
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        val spec = PBEKeySpec(
-            passphrase.toCharArray(),
-            KEY_SALT.toByteArray(Charsets.UTF_8),
-            PBKDF2_ITERATIONS,
-            KEY_BITS
-        )
-        return SecretKeySpec(factory.generateSecret(spec).encoded, KEY_ALGORITHM)
-    }
+    private val secureRandom = SecureRandom()
 
     /**
      * Encrypts arbitrary bytes with AES-256-GCM.

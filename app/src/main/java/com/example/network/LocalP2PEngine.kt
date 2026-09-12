@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import android.util.Base64
 import org.json.JSONObject
 import com.example.audio.VoiceNotePlayer
 import com.example.audio.VoiceNoteRecorder
@@ -222,6 +223,7 @@ class LocalP2PEngine(private val context: Context) {
     }
 
     fun start() {
+        PeerSessionKeyManager.initTrustStore(PersistentPeerTrustStore(context))
         bindToLocalWifiNetworkIfAvailable()
         _localIp.value = NetworkUtils.getLocalIpAddress(context)
         multicastLock = NetworkUtils.acquireMulticastLock(context)
@@ -720,12 +722,15 @@ class LocalP2PEngine(private val context: Context) {
                         multicastSocket?.receive(packet)
                         // RULE 5: signaling payloads are AES-256-GCM encrypted; any packet
                         // that fails AEAD authentication is silently discarded.
-                        // TODO: Optimize - pass offset/length to decrypt to avoid array copy
-                        val decryptedBytes = LocalCryptoEngine.decrypt(
-                            packet.data.copyOfRange(0, packet.length)
-                        ) ?: continue
-                        val dataStr = String(decryptedBytes, Charsets.UTF_8)
+                        val rawData = packet.data.copyOfRange(0, packet.length)
                         val senderIp = packet.address.hostAddress ?: ""
+                        val peerForIp = peersMap.values.firstOrNull { it.ip == senderIp }
+                        val sessionKey = peerForIp?.id?.let { PeerSessionKeyManager.getSessionKey(it) }
+
+                        val decryptedBytes = (sessionKey?.let { LocalCryptoEngine.decrypt(rawData, key = it) })
+                            ?: LocalCryptoEngine.decrypt(rawData)
+                            ?: continue
+                        val dataStr = String(decryptedBytes, Charsets.UTF_8)
                         handleIncomingPacket(dataStr, senderIp)
                     } catch (e: Exception) {
                         if (!isActive) break
@@ -1853,6 +1858,216 @@ class LocalP2PEngine(private val context: Context) {
                     }
                 }
 
+                "KEY_EXCHANGE_INIT" -> {
+                    val senderId = json.optString("id")
+                    if (senderId.isEmpty() || senderId == _userProfile.value.id) return
+                    parseAndStorePeer(json, senderIp)
+
+                    val protocolVersion = json.optInt("protocolVersion", 1)
+                    val receiverId = json.optString("receiverId")
+                    val sessionId = json.optString("sessionId")
+                    val timestamp = json.optLong("timestamp", 0L)
+
+                    // If receiverId is specified and not intended for us, drop
+                    if (receiverId.isNotEmpty() && receiverId != _userProfile.value.id) {
+                        Log.w(TAG, "KEY_EXCHANGE_INIT directed to $receiverId, not us (${_userProfile.value.id}) - dropped")
+                        return
+                    }
+
+                    val ephemeralKeyB64 = json.optString("ephemeralKey")
+                    val identityKeyB64 = json.optString("identityKey")
+                    val signatureB64 = json.optString("signature")
+
+                    if (ephemeralKeyB64.isNotEmpty()) {
+                        try {
+                            val remoteEphemeralBytes = Base64.decode(ephemeralKeyB64, Base64.NO_WRAP)
+
+                            // Identity verification if signature & identity key provided
+                            if (identityKeyB64.isNotEmpty() && signatureB64.isNotEmpty()) {
+                                val remoteIdentityBytes = Base64.decode(identityKeyB64, Base64.NO_WRAP)
+                                val signatureBytes = Base64.decode(signatureB64, Base64.NO_WRAP)
+
+                                // 1. TOFU Identity Trust Verification
+                                val trustResult = PeerSessionKeyManager.trustStore.verifyOrStoreTrust(senderId, remoteIdentityBytes)
+                                if (trustResult == PeerTrustStore.TrustResult.IDENTITY_CHANGED) {
+                                    Log.e(TAG, "KEY_EXCHANGE_INIT from $senderId rejected: TOFU identity changed! Potential MITM attack!")
+                                    PeerSessionKeyManager.recordHandshakeFailure(senderId)
+                                    return
+                                }
+
+                                // 2. Context-Bound Signature Verification
+                                val remoteIdentityPubKey = EcdhEngine.decodePublicKey(remoteIdentityBytes)
+                                if (remoteIdentityPubKey != null) {
+                                    val verificationInput = if (sessionId.isNotEmpty()) {
+                                        HandshakeCryptoUtils.buildCanonicalSignatureInput(
+                                            protocolVersion = protocolVersion,
+                                            senderId = senderId,
+                                            receiverId = if (receiverId.isNotEmpty()) receiverId else _userProfile.value.id,
+                                            sessionId = sessionId,
+                                            ephemeralPublicKeyBytes = remoteEphemeralBytes,
+                                            timestamp = timestamp
+                                        )
+                                    } else {
+                                        remoteEphemeralBytes
+                                    }
+
+                                    val isValid = KeystoreIdentityManager.verify(remoteIdentityPubKey, verificationInput, signatureBytes)
+                                    if (!isValid) {
+                                        Log.w(TAG, "KEY_EXCHANGE_INIT from $senderId failed identity signature verification - dropped")
+                                        PeerSessionKeyManager.recordHandshakeFailure(senderId)
+                                        return
+                                    }
+                                } else {
+                                    Log.w(TAG, "KEY_EXCHANGE_INIT from $senderId has invalid identity key")
+                                    PeerSessionKeyManager.recordHandshakeFailure(senderId)
+                                    return
+                                }
+                            }
+
+                            val myEphemeralBytes = PeerSessionKeyManager.respondToHandshake(senderId, remoteEphemeralBytes)
+                            if (myEphemeralBytes != null) {
+                                val replyTimestamp = System.currentTimeMillis()
+                                val replySessionId = if (sessionId.isNotEmpty()) sessionId else UUID.randomUUID().toString()
+
+                                val replyCanonicalInput = HandshakeCryptoUtils.buildCanonicalSignatureInput(
+                                    protocolVersion = HandshakeCryptoUtils.PROTOCOL_VERSION,
+                                    senderId = _userProfile.value.id,
+                                    receiverId = senderId,
+                                    sessionId = replySessionId,
+                                    ephemeralPublicKeyBytes = myEphemeralBytes,
+                                    timestamp = replyTimestamp
+                                )
+                                val mySignatureBytes = KeystoreIdentityManager.signOrNull(replyCanonicalInput)
+                                val myIdentityPubKey = try { KeystoreIdentityManager.getIdentityPublicKey().encoded } catch (e: Exception) { null }
+
+                                val replyJson = JSONObject().apply {
+                                    put("type", "KEY_EXCHANGE_REPLY")
+                                    put("protocolVersion", HandshakeCryptoUtils.PROTOCOL_VERSION)
+                                    put("id", _userProfile.value.id)
+                                    put("receiverId", senderId)
+                                    put("sessionId", replySessionId)
+                                    put("ephemeralKey", Base64.encodeToString(myEphemeralBytes, Base64.NO_WRAP))
+                                    if (myIdentityPubKey != null) {
+                                        put("identityKey", Base64.encodeToString(myIdentityPubKey, Base64.NO_WRAP))
+                                    }
+                                    if (mySignatureBytes != null) {
+                                        put("signature", Base64.encodeToString(mySignatureBytes, Base64.NO_WRAP))
+                                    }
+                                    put("timestamp", replyTimestamp)
+                                }
+                                scope.launch {
+                                    sendJsonToIp(replyJson, senderIp, targetPeerId = senderId)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error processing KEY_EXCHANGE_INIT from $senderId", e)
+                            PeerSessionKeyManager.recordHandshakeFailure(senderId)
+                        }
+                    }
+                }
+
+                "KEY_EXCHANGE_REPLY" -> {
+                    val senderId = json.optString("id")
+                    if (senderId.isEmpty() || senderId == _userProfile.value.id) return
+                    parseAndStorePeer(json, senderIp)
+
+                    val protocolVersion = json.optInt("protocolVersion", 1)
+                    val receiverId = json.optString("receiverId")
+                    val sessionId = json.optString("sessionId")
+                    val timestamp = json.optLong("timestamp", 0L)
+
+                    // If receiverId is specified and not intended for us, drop
+                    if (receiverId.isNotEmpty() && receiverId != _userProfile.value.id) {
+                        Log.w(TAG, "KEY_EXCHANGE_REPLY directed to $receiverId, not us (${_userProfile.value.id}) - dropped")
+                        return
+                    }
+
+                    // Check session ID against pending initiation
+                    val expectedSessionId = PeerSessionKeyManager.getPendingSessionId(senderId)
+                    if (expectedSessionId != null && sessionId.isNotEmpty() && expectedSessionId != sessionId) {
+                        Log.w(TAG, "KEY_EXCHANGE_REPLY from $senderId session ID mismatch: expected $expectedSessionId, got $sessionId")
+                        PeerSessionKeyManager.recordHandshakeFailure(senderId)
+                        return
+                    }
+
+                    val ephemeralKeyB64 = json.optString("ephemeralKey")
+                    val identityKeyB64 = json.optString("identityKey")
+                    val signatureB64 = json.optString("signature")
+
+                    if (ephemeralKeyB64.isNotEmpty()) {
+                        try {
+                            val remoteEphemeralBytes = Base64.decode(ephemeralKeyB64, Base64.NO_WRAP)
+
+                            // Identity verification if signature & identity key provided
+                            if (identityKeyB64.isNotEmpty() && signatureB64.isNotEmpty()) {
+                                val remoteIdentityBytes = Base64.decode(identityKeyB64, Base64.NO_WRAP)
+                                val signatureBytes = Base64.decode(signatureB64, Base64.NO_WRAP)
+
+                                // 1. TOFU Identity Trust Verification
+                                val trustResult = PeerSessionKeyManager.trustStore.verifyOrStoreTrust(senderId, remoteIdentityBytes)
+                                if (trustResult == PeerTrustStore.TrustResult.IDENTITY_CHANGED) {
+                                    Log.e(TAG, "KEY_EXCHANGE_REPLY from $senderId rejected: TOFU identity changed! Potential MITM attack!")
+                                    PeerSessionKeyManager.recordHandshakeFailure(senderId)
+                                    return
+                                }
+
+                                // 2. Context-Bound Signature Verification
+                                val remoteIdentityPubKey = EcdhEngine.decodePublicKey(remoteIdentityBytes)
+                                if (remoteIdentityPubKey != null) {
+                                    val verificationInput = if (sessionId.isNotEmpty()) {
+                                        HandshakeCryptoUtils.buildCanonicalSignatureInput(
+                                            protocolVersion = protocolVersion,
+                                            senderId = senderId,
+                                            receiverId = if (receiverId.isNotEmpty()) receiverId else _userProfile.value.id,
+                                            sessionId = sessionId,
+                                            ephemeralPublicKeyBytes = remoteEphemeralBytes,
+                                            timestamp = timestamp
+                                        )
+                                    } else {
+                                        remoteEphemeralBytes
+                                    }
+
+                                    val isValid = KeystoreIdentityManager.verify(remoteIdentityPubKey, verificationInput, signatureBytes)
+                                    if (!isValid) {
+                                        Log.w(TAG, "KEY_EXCHANGE_REPLY from $senderId failed identity signature verification - dropped")
+                                        PeerSessionKeyManager.recordHandshakeFailure(senderId)
+                                        return
+                                    }
+                                } else {
+                                    Log.w(TAG, "KEY_EXCHANGE_REPLY from $senderId has invalid identity key")
+                                    PeerSessionKeyManager.recordHandshakeFailure(senderId)
+                                    return
+                                }
+                            }
+
+                            val sessionKey = PeerSessionKeyManager.completeHandshake(senderId, remoteEphemeralBytes)
+                            if (sessionKey != null) {
+                                Log.i(TAG, "ECDH session key established with peer: $senderId")
+                                val ackJson = JSONObject().apply {
+                                    put("type", "KEY_EXCHANGE_ACK")
+                                    put("protocolVersion", HandshakeCryptoUtils.PROTOCOL_VERSION)
+                                    put("id", _userProfile.value.id)
+                                    put("receiverId", senderId)
+                                    put("sessionId", sessionId)
+                                    put("status", "ESTABLISHED")
+                                    put("timestamp", System.currentTimeMillis())
+                                }
+                                scope.launch {
+                                    sendJsonToIp(ackJson, senderIp, targetPeerId = senderId)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error processing KEY_EXCHANGE_REPLY from $senderId", e)
+                            PeerSessionKeyManager.recordHandshakeFailure(senderId)
+                        }
+                    }
+                }
+
+                "KEY_EXCHANGE_ACK" -> {
+                    val senderId = json.optString("id")
+                    Log.i(TAG, "ECDH session confirmed established by remote peer: $senderId")
+                }
+
                 "HANDSHAKE_PROBE" -> {
                     val id = json.optString("id")
                     if (id == _userProfile.value.id || id.isEmpty()) return
@@ -2398,8 +2613,32 @@ class LocalP2PEngine(private val context: Context) {
         }
     }
 
-    private suspend fun sendJsonToIp(json: JSONObject, ip: String) {
-        val bytes = LocalCryptoEngine.encryptJson(json.toString())
+    private suspend fun sendJsonToIp(json: JSONObject, ip: String, targetPeerId: String? = null) {
+        val peerId = targetPeerId ?: peersMap.values.firstOrNull { it.ip == ip }?.id
+        val status = peerId?.let { PeerSessionKeyManager.getSecurityStatus(it) } ?: PeerSessionKeyManager.PeerSecurityStatus.LEGACY
+        val type = json.optString("type")
+        val isHandshakeMessage = type in setOf(
+            "KEY_EXCHANGE_INIT",
+            "KEY_EXCHANGE_REPLY",
+            "KEY_EXCHANGE_ACK",
+            "HANDSHAKE_PROBE",
+            "HANDSHAKE_ACK",
+            "PEER_DISCOVERY",
+            "PEER_ANNOUNCE"
+        )
+
+        // Fail-safe downgrade prevention: Never fall back silently to networkKey for peers that failed handshake
+        if (!isHandshakeMessage && status == PeerSessionKeyManager.PeerSecurityStatus.HANDSHAKE_FAILED) {
+            Log.w(TAG, "SECURE_SESSION_UNAVAILABLE: Refusing to transmit $type to peer $peerId via legacy fallback (Downgrade Prevention)")
+            return
+        }
+
+        val peerKey = peerId?.let { PeerSessionKeyManager.getSessionKey(it) }
+        val bytes = if (peerKey != null) {
+            LocalCryptoEngine.encryptJson(json.toString(), key = peerKey)
+        } else {
+            LocalCryptoEngine.encryptJson(json.toString())
+        }
         if (broadcastSocket == null) {
             broadcastSocket = DatagramSocket()
         }
@@ -2449,8 +2688,13 @@ class LocalP2PEngine(private val context: Context) {
             lastSeen = System.currentTimeMillis(),
             deviceModel = device
         )
+        val isNewPeer = !peersMap.containsKey(id)
         peersMap[id] = peer
         _discoveredPeers.value = peersMap.values.toList()
+
+        if (isNewPeer && !PeerSessionKeyManager.hasSessionKey(id)) {
+            initiateKeyExchange(peer)
+        }
 
         // If peer is in our room, update audio/video target
         if (room == _currentRoom.value) {
@@ -2464,6 +2708,58 @@ class LocalP2PEngine(private val context: Context) {
         }
     }
 
+    /**
+     * Initiates a 2-way ECDH key exchange with a discovered peer to establish a pairwise session key.
+     */
+    fun initiateKeyExchange(peer: Peer) {
+        if (PeerSessionKeyManager.hasSessionKey(peer.id)) return
+        scope.launch {
+            try {
+                val sessionId = UUID.randomUUID().toString()
+                val myEphemeralBytes = PeerSessionKeyManager.startHandshake(peer.id, sessionId)
+                val timestamp = System.currentTimeMillis()
+
+                val canonicalInput = HandshakeCryptoUtils.buildCanonicalSignatureInput(
+                    protocolVersion = HandshakeCryptoUtils.PROTOCOL_VERSION,
+                    senderId = _userProfile.value.id,
+                    receiverId = peer.id,
+                    sessionId = sessionId,
+                    ephemeralPublicKeyBytes = myEphemeralBytes,
+                    timestamp = timestamp
+                )
+                val mySignatureBytes = KeystoreIdentityManager.signOrNull(canonicalInput)
+                val myIdentityPubKey = try { KeystoreIdentityManager.getIdentityPublicKey().encoded } catch (e: Exception) { null }
+
+                val initJson = JSONObject().apply {
+                    put("type", "KEY_EXCHANGE_INIT")
+                    put("protocolVersion", HandshakeCryptoUtils.PROTOCOL_VERSION)
+                    put("id", _userProfile.value.id)
+                    put("receiverId", peer.id)
+                    put("sessionId", sessionId)
+                    put("ephemeralKey", Base64.encodeToString(myEphemeralBytes, Base64.NO_WRAP))
+                    if (myIdentityPubKey != null) {
+                        put("identityKey", Base64.encodeToString(myIdentityPubKey, Base64.NO_WRAP))
+                    }
+                    if (mySignatureBytes != null) {
+                        put("signature", Base64.encodeToString(mySignatureBytes, Base64.NO_WRAP))
+                    }
+                    put("timestamp", timestamp)
+                }
+                // Send with network key since pairwise session key is being negotiated
+                val networkBytes = LocalCryptoEngine.encryptJson(initJson.toString())
+                if (broadcastSocket == null) {
+                    broadcastSocket = DatagramSocket()
+                }
+                val targetAddr = InetAddress.getByName(peer.ip)
+                val packet = DatagramPacket(networkBytes, networkBytes.size, targetAddr, NetworkUtils.DISCOVERY_PORT)
+                broadcastSocket?.send(packet)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initiate key exchange with ${peer.id}", e)
+                PeerSessionKeyManager.recordHandshakeFailure(peer.id)
+            }
+        }
+    }
+
     fun release() {
         scanJob?.cancel()
         discoveryJob?.cancel()
@@ -2472,6 +2768,7 @@ class LocalP2PEngine(private val context: Context) {
         ringingTimeoutJob?.cancel()
         incomingRingTimeoutJob?.cancel()
         groupRingTimeoutJob?.cancel()
+        PeerSessionKeyManager.clearAll()
         typingMap.clear()
         _typingPeers.value = emptyList()
         callToneManager.stopAll()

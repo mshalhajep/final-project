@@ -199,7 +199,9 @@ val normalizeGeneratedDigits = tasks.register(
   outputs.upToDateWhen { false }
 }
 
-tasks.matching { it.name.startsWith("ksp") && it.name.endsWith("Kotlin") }.configureEach {
+tasks.matching {
+  it.name.startsWith("ksp") && it.name.endsWith("Kotlin") && !it.name.contains("Test")
+}.configureEach {
   finalizedBy(normalizeGeneratedDigits)
 }
 
