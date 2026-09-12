@@ -533,31 +533,92 @@
     max-width: 700px;
   }
 
-  .tech-pills {
-    display: flex;
-    gap: 10px;
-    margin-top: 10px;
-    flex-wrap: wrap;
-    justify-content: center;
+  .crypto-chips-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    width: 100%;
+    max-width: 1020px;
+    margin: 4px 0;
   }
 
-  .tech-pill {
-    background: var(--bg-card);
-    border: 1px solid var(--border-card);
-    padding: 6px 14px;
+  .crypto-chip {
+    background: rgba(19, 27, 46, 0.95);
+    border: 1px solid rgba(56, 189, 248, 0.25);
     border-radius: 8px;
+    padding: 7px 12px;
+    display: flex;
+    flex-direction: column;
+    text-align: right;
+    gap: 2px;
+  }
+
+  .chip-algo {
     font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 800;
+    color: #38bdf8;
+    direction: ltr;
+    text-align: right;
+  }
+
+  .chip-role {
+    font-size: 10px;
+    color: #94a3b8;
+  }
+
+  .team-container {
+    width: 100%;
+    max-width: 1020px;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid var(--border-card);
+    border-radius: 8px;
+    padding: 8px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 2px;
+  }
+
+  .team-title {
+    font-size: 11.5px;
+    font-weight: 800;
+    color: #38bdf8;
+    text-align: right;
+  }
+
+  .students-grid {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .student-card {
+    background: #1a253f;
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    padding: 5px 14px;
+    border-radius: 6px;
     font-size: 12px;
-    color: #cbd5e1;
+    font-weight: 800;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .student-card::before {
+    content: "🎓";
+    font-size: 11px;
   }
 
   .presenter-meta {
-    margin-top: 20px;
+    margin-top: 10px;
     border-top: 1px solid var(--border-card);
-    padding-top: 16px;
+    padding-top: 12px;
     display: flex;
     gap: 36px;
-    font-size: 13px;
+    font-size: 12.5px;
   }
 
   .meta-point {
@@ -567,7 +628,7 @@
   }
 
   .meta-point span:first-child {
-    font-size: 11px;
+    font-size: 10.5px;
     color: var(--text-dim);
   }
 
@@ -583,7 +644,7 @@
 <header class="top-bar">
   <div class="top-left">
     <div class="app-badge">LOCAL CONTACT P2P</div>
-    <div class="top-title">عرض المناقشة الأكاديمي: التصميم الأمني والتشفير</div>
+    <div class="top-title">عرض المناقشة الأكاديمي: مناقشة خوارزميات التشفير</div>
   </div>
   <div class="top-right">
     <div class="slide-counter" id="slideIndicator">1 / 12</div>
@@ -597,31 +658,62 @@
 <main class="deck-container">
 
   <!-- ==================== الشريحة 1 ==================== -->
-  <section class="slide active" id="slide-1" data-notes="اشرح للأساتذة أن المشروع يوفر اتصالًا مباشرًا بين أجهزة الأندرويد عبر الشبكة المحلية (Wi-Fi أو Hotspot) دون الاعتماد على خادم مركزي أو سحابة إطلاقاً. ركز في الافتتاحية على أن الهدف هو استعراض النقلة المعمارية والأمنية للتطبيق ومقارنة حالة التشفير قبل وبعد التحسين.">
+  <section class="slide active" id="slide-1" data-notes="اشرح للأساتذة في الافتتاحية أن هذا العرض يركز على مناقشة خوارزميات التشفير في مشروع LOCAL CONTACT، وهو نظام اتصال محلي P2P يعمل دون خادم مركزي. وقدم زملاءك في فريق العمل: مشعل حاجب، قحطان الشاجع، أواب النزيلي، محمد العيدروس، ومحمد العواضي، مع استعراض الخوارزميات الأساسية الست المستخدمة في النظام.">
     <div class="title-slide-wrap">
-      <div class="title-badge-hero">🛡️ المناقشة الأكاديمية لمشروع التخرج والماجستير</div>
-      <h1 class="main-hero-title">التصميم الأمني والتشفير في مشروع LOCAL CONTACT</h1>
-      <p class="main-hero-subtitle">تحسين نظام اتصال P2P محلي يعمل باستقلالية تامة دون خادم مركزي</p>
+      <div class="title-badge-hero">🛡️ المناقشة الأكاديمية — هندسة البرمجيات والتشفير المتقدم</div>
+      <h1 class="main-hero-title">مناقشة خوارزميات التشفير في مشروع LOCAL CONTACT</h1>
+      <p class="main-hero-subtitle">التصميم الأمني وهندسة خوارزميات التشفير في نظام اتصال P2P محلي مستقل يعمل دون خادم مركزي</p>
 
-      <div class="tech-pills">
-        <span class="tech-pill">📱 Android API 24+</span>
-        <span class="tech-pill">🌐 Local Wi-Fi / Hotspot</span>
-        <span class="tech-pill">🔒 Offline P2P Protocol</span>
-        <span class="tech-pill">⚡ AES-256-GCM + ECDH + Keystore</span>
+      <div class="crypto-chips-grid">
+        <div class="crypto-chip">
+          <span class="chip-algo">AES-256-GCM</span>
+          <span class="chip-role">التشفير المتماثل ومصادقة البيانات وحماية السلامة (AEAD)</span>
+        </div>
+        <div class="crypto-chip">
+          <span class="chip-algo">ECDH (NIST P-256)</span>
+          <span class="chip-role">تبادل المفاتيح المنحني وتأمين Forward Secrecy</span>
+        </div>
+        <div class="crypto-chip">
+          <span class="chip-algo">HKDF-SHA256</span>
+          <span class="chip-role">دالة اشتقاق مفاتيح الجلسات المستقلة (RFC 5869)</span>
+        </div>
+        <div class="crypto-chip">
+          <span class="chip-algo">ECDSA + Keystore</span>
+          <span class="chip-role">التوقيع الرقمي وهوية الجهاز بالمعالج الآمن (TEE)</span>
+        </div>
+        <div class="crypto-chip">
+          <span class="chip-algo">SHA-256 Fingerprint</span>
+          <span class="chip-role">بصمات المفاتيح ونموذج تثبيت الهوية (TOFU)</span>
+        </div>
+        <div class="crypto-chip">
+          <span class="chip-algo">PBKDF2-HMAC-SHA256</span>
+          <span class="chip-role">اشتقاق المفتاح الشبكي المشترك للتوافق العكسي</span>
+        </div>
+      </div>
+
+      <div class="team-container">
+        <div class="team-title">👥 فريق العمل والطلاب المنفذون للمشروع:</div>
+        <div class="students-grid">
+          <div class="student-card"><span class="student-name">مشعل حاجب</span></div>
+          <div class="student-card"><span class="student-name">قحطان الشاجع</span></div>
+          <div class="student-card"><span class="student-name">أواب النزيلي</span></div>
+          <div class="student-card"><span class="student-name">محمد العيدروس</span></div>
+          <div class="student-card"><span class="student-name">محمد العواضي</span></div>
+        </div>
       </div>
 
       <div class="presenter-meta">
         <div class="meta-point">
-          <span>إعداد الطالب:</span>
-          <span style="color: #38bdf8; font-size: 15px;">مشعل</span>
+          <span>لجنة المناقشة والتحكيم:</span>
+          <span style="color: #ffffff;">أستاذ التشفير &amp; أستاذ هندسة البرمجيات</span>
         </div>
         <div class="meta-point">
-          <span>لجنة المناقشة:</span>
-          <span>أستاذ التشفير & أستاذ هندسة البرمجيات</span>
+          <span>بيئة العمل والتطوير:</span>
+          <span style="color: #cbd5e1;">Android SDK (API 24+) &bull; Kotlin &bull; JVM</span>
         </div>
         <div class="meta-point">
           <span>حالة البناء والتحقق:</span>
-          <span style="color: #10b981;">BUILD SUCCESSFUL (33/33 Tests)</span>
+          <span style="color: #10b981;">BUILD SUCCESSFUL (33/33 Tests Passed)</span>
         </div>
       </div>
     </div>
