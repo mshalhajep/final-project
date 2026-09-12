@@ -1,1357 +1,1447 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>التصميم الأمني والتشفير في مشروع LOCAL CONTACT</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@500;700;800&family=Fira+Code:wght@400;500;600;700&display=swap');
-
-  :root {
-    --bg-dark: #f8fafc;
-    --bg-card: #ffffff;
-    --bg-card-hover: #f1f5f9;
-    --border-card: #cbd5e1;
-    --primary-blue: #0f2b5c;
-    --accent-blue: #1e40af;
-    --sky-blue: #0284c7;
-    --text-white: #0f172a;
-    --text-muted: #334155;
-    --text-dim: #64748b;
-    --status-green: #059669;
-    --status-green-bg: rgba(5, 150, 105, 0.12);
-    --status-amber: #d97706;
-    --status-amber-bg: rgba(217, 119, 6, 0.12);
-    --status-red: #dc2626;
-    --status-red-bg: rgba(220, 38, 38, 0.12);
-    --status-blue: #1e40af;
-    --status-blue-bg: rgba(30, 64, 175, 0.10);
-    --font-sans: 'Cairo', 'Tajawal', sans-serif;
-    --font-mono: 'Fira Code', monospace;
-  }
-
-  * {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-    user-select: none;
-  }
-
-  body {
-    background-color: var(--bg-dark);
-    color: var(--text-white);
-    font-family: var(--font-sans);
-    overflow: hidden;
-    height: 100vh;
-    width: 100vw;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* Top Bar & Progress */
-  .top-bar {
-    height: 52px;
-    background: #ffffff;
-    border-bottom: 2px solid #e2e8f0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 28px;
-    z-index: 100;
-  }
-
-  .top-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .app-badge {
-    background: linear-gradient(135deg, #0284c7, #1e40af);
-    color: #ffffff;
-    font-size: 11px;
-    font-weight: 800;
-    padding: 3px 10px;
-    border-radius: 6px;
-    letter-spacing: 0.5px;
-    font-family: var(--font-mono);
-  }
-
-  .top-title {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text-muted);
-  }
-
-  .top-right {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-
-  .slide-counter {
-    font-family: var(--font-mono);
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--primary-blue);
-    background: var(--bg-card);
-    padding: 4px 12px;
-    border-radius: 9999px;
-    border: 1px solid var(--border-card);
-  }
-
-  .progress-container {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    height: 3px;
-    background: rgba(255, 255, 255, 0.05);
-  }
-
-  .progress-bar {
-    height: 100%;
-    width: 8.33%;
-    background: linear-gradient(90deg, #0284c7, #38bdf8);
-    transition: width 0.35s ease;
-  }
-
-  /* Slide Deck Viewport */
-  .deck-container {
-    flex: 1;
-    position: relative;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px 36px 80px 36px;
-  }
-
-  .slide {
-    position: absolute;
-    width: 100%;
-    max-width: 1240px;
-    height: 100%;
-    max-height: 720px;
-    display: none;
-    flex-direction: column;
-    justify-content: space-between;
-    opacity: 0;
-    transform: translateY(12px) scale(0.99);
-    transition: opacity 0.3s ease, transform 0.3s ease;
-  }
-
-  .slide.active {
-    display: flex;
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-
-  /* Slide Header */
-  .slide-header {
-    border-bottom: 1px solid var(--border-card);
-    padding-bottom: 14px;
-    margin-bottom: 18px;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-  }
-
-  .slide-title-wrap {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .slide-category {
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-    color: var(--primary-blue);
-    letter-spacing: 1px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .slide-category::before {
-    content: "";
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--primary-blue);
-  }
-
-  .slide-title {
-    font-size: 26px;
-    font-weight: 900;
-    color: var(--primary-blue);
-    line-height: 1.25;
-  }
-
-  .slide-subtitle {
-    font-size: 13.5px;
-    color: var(--text-muted);
-    font-weight: 500;
-  }
-
-  /* Status Tags */
-  .status-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 12px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 800;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-  }
-
-  .status-implemented {
-    background: var(--status-green-bg);
-    color: var(--status-green);
-    border: 1px solid rgba(5, 150, 105, 0.3);
-  }
-
-  .status-jvm-tested {
-    background: rgba(30, 64, 175, 0.08);
-    color: #1e40af;
-    border: 1px solid rgba(30, 64, 175, 0.3);
-  }
-
-  .status-integrated {
-    background: rgba(14, 116, 144, 0.08);
-    color: #0e7490;
-    border: 1px solid rgba(14, 116, 144, 0.3);
-  }
-
-  .status-pending {
-    background: var(--status-amber-bg);
-    color: var(--status-amber);
-    border: 1px solid rgba(217, 119, 6, 0.3);
-  }
-
-  .status-missing {
-    background: var(--status-red-bg);
-    color: var(--status-red);
-    border: 1px solid rgba(220, 38, 38, 0.3);
-  }
-
-  /* Slide Body & Content Grids */
-  .slide-body {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 16px;
-    overflow-y: auto;
-    padding-right: 4px;
-  }
-
-  .grid-2 {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 16px;
-  }
-
-  .grid-3 {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
-  }
-
-  .grid-4 {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-  }
-
-  /* Cards */
-  .card {
-    background: var(--bg-card);
-    border: 1.5px solid var(--border-card);
-    border-radius: 10px;
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    box-shadow: 0 4px 12px rgba(15, 43, 92, 0.06);
-    transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
-  }
-
-  .card:hover {
-    border-color: var(--accent-blue);
-    box-shadow: 0 8px 20px rgba(30, 64, 175, 0.12);
-    transform: translateY(-2px);
-  }
-
-  .card-header-line {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 2px;
-  }
-
-  .card-icon {
-    font-size: 20px;
-  }
-
-  .card-title {
-    font-size: 15px;
-    font-weight: 800;
-    color: var(--primary-blue);
-  }
-
-  .card-desc {
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.6;
-  }
-
-  /* File Info Box */
-  .file-box {
-    background: #f1f5f9;
-    border: 1px solid #cbd5e1;
-    border-right: 4px solid var(--accent-blue);
-    border-radius: 8px;
-    padding: 10px 14px;
-    margin-top: 4px;
-  }
-
-  .file-meta-row {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .file-path {
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    color: #1e40af;
-    direction: ltr;
-    text-align: left;
-    font-weight: 700;
-  }
-
-  .file-purpose {
-    font-size: 11px;
-    color: #1e293b;
-    margin-top: 2px;
-  }
-
-  .file-why {
-    font-size: 11px;
-    color: #475569;
-  }
-
-  .file-why strong {
-    color: #0f2b5c;
-  }
-
-  /* Modern Presentation Tables */
-  table.pres-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    background: #ffffff;
-    border: 1.5px solid var(--border-card);
-    border-radius: 8px;
-    overflow: hidden;
-    font-size: 12px;
-  }
-
-  table.pres-table th {
-    background: #eff6ff;
-    color: var(--primary-blue);
-    font-weight: 800;
-    padding: 10px 14px;
-    text-align: right;
-    border-bottom: 2px solid #bfdbfe;
-  }
-
-  table.pres-table td {
-    padding: 10px 14px;
-    border-bottom: 1px solid #e2e8f0;
-    color: #1e293b;
-    vertical-align: middle;
-  }
-
-  table.pres-table tr:last-child td {
-    border-bottom: none;
-  }
-
-  table.pres-table tr:hover td {
-    background: #f8fafc;
-  }
-
-  .mono-term {
-    font-family: var(--font-mono);
-    color: #1e40af;
-    direction: ltr;
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 600;
-  }
-
-  /* Speaker Notes Overlay */
-  .speaker-notes-panel {
-    background: #ffffff;
-    border-top: 3px solid var(--accent-blue);
-    padding: 12px 28px;
-    position: fixed;
-    bottom: 52px;
-    left: 0;
-    width: 100%;
-    height: 115px;
-    z-index: 90;
-    display: none;
-    flex-direction: column;
-    justify-content: center;
-    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.08);
-  }
-
-  .speaker-notes-panel.visible {
-    display: flex;
-  }
-
-  .notes-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 11px;
-    font-weight: 800;
-    color: var(--accent-blue);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 4px;
-  }
-
-  .notes-content {
-    font-size: 12.5px;
-    color: #1e293b;
-    line-height: 1.6;
-  }
-
-  /* Bottom Controls Bar */
-  .bottom-bar {
-    height: 52px;
-    background: #ffffff;
-    border-top: 2px solid #e2e8f0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 28px;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    z-index: 100;
-  }
-
-  .controls-group {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .btn-nav {
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    color: #1e40af;
-    padding: 7px 16px;
-    border-radius: 8px;
-    font-family: var(--font-sans);
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.15s ease;
-  }
-
-  .btn-nav:hover {
-    background: #1e40af;
-    color: #ffffff;
-    border-color: #1e40af;
-  }
-
-  .btn-nav:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-    background: #f1f5f9;
-    border-color: #cbd5e1;
-    color: #94a3b8;
-  }
-
-  .btn-notes {
-    background: #f8fafc;
-    border: 1px solid #cbd5e1;
-    color: #475569;
-    padding: 7px 14px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.15s ease;
-  }
-
-  .nav-btn, .btn-nav {
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    color: #1e40af;
-    padding: 7px 16px;
-    border-radius: 8px;
-    font-family: var(--font-sans);
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.15s ease;
-  }
-
-  .nav-btn:hover, .btn-nav:hover {
-    background: #1e40af;
-    color: #ffffff;
-    border-color: #1e40af;
-  }
-
-  .nav-btn:disabled, .btn-nav:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-    background: #f1f5f9;
-    border-color: #cbd5e1;
-    color: #94a3b8;
-  }
-
-  .toggle-notes-btn, .btn-notes {
-    background: #f8fafc;
-    border: 1px solid #cbd5e1;
-    color: #1e40af;
-    padding: 7px 14px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.15s ease;
-  }
-
-  .toggle-notes-btn.active, .toggle-notes-btn:hover,
-  .btn-notes.active, .btn-notes:hover {
-    background: #1e40af;
-    color: #ffffff;
-    border-color: #1e40af;
-  }
-
-  .keyboard-hint {
-    font-size: 11px;
-    color: var(--text-dim);
-    font-family: var(--font-mono);
-  }
-
-  /* Title Slide Specific */
-  .title-slide-wrap {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    text-align: center;
-    gap: 20px;
-  }
-
-  .title-badge-hero {
-    background: #eff6ff;
-    border: 1.5px solid #bfdbfe;
-    padding: 6px 20px;
-    border-radius: 9999px;
-    color: #1e40af;
-    font-size: 12.5px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
-  }
-
-  .main-hero-title {
-    font-size: 38px;
-    font-weight: 900;
-    color: #0f2b5c;
-    line-height: 1.25;
-    max-width: 900px;
-  }
-
-  .main-hero-subtitle {
-    font-size: 16px;
-    color: #475569;
-    font-weight: 600;
-    max-width: 750px;
-  }
-
-  .crypto-chips-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-    width: 100%;
-    max-width: 1020px;
-    margin: 6px 0;
-  }
-
-  .crypto-chip {
-    background: #ffffff;
-    border: 1.5px solid #cbd5e1;
-    border-radius: 8px;
-    padding: 8px 14px;
-    display: flex;
-    flex-direction: column;
-    text-align: right;
-    gap: 3px;
-    box-shadow: 0 2px 8px rgba(15, 43, 92, 0.05);
-  }
-
-  .crypto-chip:hover {
-    border-color: #1e40af;
-  }
-
-  .chip-algo {
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    font-weight: 800;
-    color: #1e40af;
-    direction: ltr;
-    text-align: right;
-  }
-
-  .chip-role {
-    font-size: 10.5px;
-    color: #334155;
-    font-weight: 600;
-  }
-
-  .team-container {
-    width: 100%;
-    max-width: 1020px;
-    background: #eff6ff;
-    border: 1.5px solid #bfdbfe;
-    border-radius: 10px;
-    padding: 10px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 4px;
-  }
-
-  .team-title {
-    font-size: 12px;
-    font-weight: 800;
-    color: #0f2b5c;
-    text-align: right;
-  }
-
-  .students-grid {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .student-card {
-    background: #ffffff;
-    border: 1.5px solid #93c5fd;
-    padding: 6px 16px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 800;
-    color: #0f2b5c;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    box-shadow: 0 2px 6px rgba(30, 64, 175, 0.08);
-  }
-
-  .student-card::before {
-    content: "🎓";
-    font-size: 11px;
-  }
-
-  .presenter-meta {
-    margin-top: 10px;
-    border-top: 1px solid var(--border-card);
-    padding-top: 12px;
-    display: flex;
-    gap: 36px;
-    font-size: 12.5px;
-  }
-
-  .meta-point {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .meta-point span:first-child {
-    font-size: 10.5px;
-    color: var(--text-dim);
-  }
-
-  .meta-point span:last-child {
-    font-weight: 800;
-    color: #ffffff;
-  }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>التصميم الأمني والتشفير في مشروع LOCAL CONTACT</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@500;700;800&family=Fira+Code:wght@400;500;600;700&display=swap');
+
+    :root {
+      --bg-dark: #f8fafc;
+      --bg-card: #ffffff;
+      --bg-card-hover: #f1f5f9;
+      --border-card: #cbd5e1;
+      --primary-blue: #0f2b5c;
+      --accent-blue: #1e40af;
+      --sky-blue: #0284c7;
+      --text-white: #0f172a;
+      --text-muted: #334155;
+      --text-dim: #64748b;
+      --status-green: #059669;
+      --status-green-bg: rgba(5, 150, 105, 0.12);
+      --status-amber: #d97706;
+      --status-amber-bg: rgba(217, 119, 6, 0.12);
+      --status-red: #dc2626;
+      --status-red-bg: rgba(220, 38, 38, 0.12);
+      --status-blue: #1e40af;
+      --status-blue-bg: rgba(30, 64, 175, 0.10);
+      --font-sans: 'Cairo', 'Tajawal', sans-serif;
+      --font-mono: 'Fira Code', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-white);
+      font-family: var(--font-sans);
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Bar & Progress */
+    .top-bar {
+      height: 52px;
+      background: #ffffff;
+      border-bottom: 2px solid #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      z-index: 100;
+    }
+
+    .top-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .app-badge {
+      background: linear-gradient(135deg, #0284c7, #1e40af);
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 3px 10px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+      font-family: var(--font-mono);
+    }
+
+    .top-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .top-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .slide-counter {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--primary-blue);
+      background: var(--bg-card);
+      padding: 4px 12px;
+      border-radius: 9999px;
+      border: 1px solid var(--border-card);
+    }
+
+    .progress-container {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 3px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 8.33%;
+      background: linear-gradient(90deg, #0284c7, #38bdf8);
+      transition: width 0.35s ease;
+    }
+
+    /* Slide Deck Viewport */
+    .deck-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 36px 80px 36px;
+    }
+
+    .slide {
+      position: absolute;
+      width: 100%;
+      max-width: 1240px;
+      height: 100%;
+      max-height: 720px;
+      display: none;
+      flex-direction: column;
+      justify-content: space-between;
+      opacity: 0;
+      transform: translateY(12px) scale(0.99);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    .slide.active {
+      display: flex;
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    /* Slide Header */
+    .slide-header {
+      border-bottom: 1px solid var(--border-card);
+      padding-bottom: 14px;
+      margin-bottom: 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+
+    .slide-title-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .slide-category {
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: var(--primary-blue);
+      letter-spacing: 1px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .slide-category::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--primary-blue);
+    }
+
+    .slide-title {
+      font-size: 26px;
+      font-weight: 900;
+      color: var(--primary-blue);
+      line-height: 1.25;
+    }
+
+    .slide-subtitle {
+      font-size: 13.5px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* Status Tags */
+    .status-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
+
+    .status-implemented {
+      background: var(--status-green-bg);
+      color: var(--status-green);
+      border: 1px solid rgba(5, 150, 105, 0.3);
+    }
+
+    .status-jvm-tested {
+      background: rgba(30, 64, 175, 0.08);
+      color: #1e40af;
+      border: 1px solid rgba(30, 64, 175, 0.3);
+    }
+
+    .status-integrated {
+      background: rgba(14, 116, 144, 0.08);
+      color: #0e7490;
+      border: 1px solid rgba(14, 116, 144, 0.3);
+    }
+
+    .status-pending {
+      background: var(--status-amber-bg);
+      color: var(--status-amber);
+      border: 1px solid rgba(217, 119, 6, 0.3);
+    }
+
+    .status-missing {
+      background: var(--status-red-bg);
+      color: var(--status-red);
+      border: 1px solid rgba(220, 38, 38, 0.3);
+    }
+
+    /* Slide Body & Content Grids */
+    .slide-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 16px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-card);
+      border: 1.5px solid var(--border-card);
+      border-radius: 10px;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      box-shadow: 0 4px 12px rgba(15, 43, 92, 0.06);
+      transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .card:hover {
+      border-color: var(--accent-blue);
+      box-shadow: 0 8px 20px rgba(30, 64, 175, 0.12);
+      transform: translateY(-2px);
+    }
+
+    .card-header-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2px;
+    }
+
+    .card-icon {
+      font-size: 20px;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--primary-blue);
+    }
+
+    .card-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* File Info Box */
+    .file-box {
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      border-right: 4px solid var(--accent-blue);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-top: 4px;
+    }
+
+    .file-meta-row {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .file-path {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: #1e40af;
+      direction: ltr;
+      text-align: left;
+      font-weight: 700;
+    }
+
+    .file-purpose {
+      font-size: 11px;
+      color: #1e293b;
+      margin-top: 2px;
+    }
+
+    .file-why {
+      font-size: 11px;
+      color: #475569;
+    }
+
+    .file-why strong {
+      color: #0f2b5c;
+    }
+
+    /* Modern Presentation Tables */
+    table.pres-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      background: #ffffff;
+      border: 1.5px solid var(--border-card);
+      border-radius: 8px;
+      overflow: hidden;
+      font-size: 12px;
+    }
+
+    table.pres-table th {
+      background: #eff6ff;
+      color: var(--primary-blue);
+      font-weight: 800;
+      padding: 10px 14px;
+      text-align: right;
+      border-bottom: 2px solid #bfdbfe;
+    }
+
+    table.pres-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #e2e8f0;
+      color: #1e293b;
+      vertical-align: middle;
+    }
+
+    table.pres-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    table.pres-table tr:hover td {
+      background: #f8fafc;
+    }
+
+    .mono-term {
+      font-family: var(--font-mono);
+      color: #1e40af;
+      direction: ltr;
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    /* Speaker Notes Overlay */
+    .speaker-notes-panel {
+      background: #ffffff;
+      border-top: 3px solid var(--accent-blue);
+      padding: 12px 28px;
+      position: fixed;
+      bottom: 52px;
+      left: 0;
+      width: 100%;
+      height: 115px;
+      z-index: 90;
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.08);
+    }
+
+    .speaker-notes-panel.visible {
+      display: flex;
+    }
+
+    .notes-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--accent-blue);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .notes-content {
+      font-size: 12.5px;
+      color: #1e293b;
+      line-height: 1.6;
+    }
+
+    /* Bottom Controls Bar */
+    .bottom-bar {
+      height: 52px;
+      background: #ffffff;
+      border-top: 2px solid #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      z-index: 100;
+    }
+
+    .controls-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn-nav {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1e40af;
+      padding: 7px 16px;
+      border-radius: 8px;
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+
+    .btn-nav:hover {
+      background: #1e40af;
+      color: #ffffff;
+      border-color: #1e40af;
+    }
+
+    .btn-nav:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      background: #f1f5f9;
+      border-color: #cbd5e1;
+      color: #94a3b8;
+    }
+
+    .btn-notes {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      color: #475569;
+      padding: 7px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+
+    .nav-btn,
+    .btn-nav {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1e40af;
+      padding: 7px 16px;
+      border-radius: 8px;
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+
+    .nav-btn:hover,
+    .btn-nav:hover {
+      background: #1e40af;
+      color: #ffffff;
+      border-color: #1e40af;
+    }
+
+    .nav-btn:disabled,
+    .btn-nav:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      background: #f1f5f9;
+      border-color: #cbd5e1;
+      color: #94a3b8;
+    }
+
+    .toggle-notes-btn,
+    .btn-notes {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      color: #1e40af;
+      padding: 7px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+
+    .toggle-notes-btn.active,
+    .toggle-notes-btn:hover,
+    .btn-notes.active,
+    .btn-notes:hover {
+      background: #1e40af;
+      color: #ffffff;
+      border-color: #1e40af;
+    }
+
+    .keyboard-hint {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+    }
+
+    /* Title Slide Specific */
+    .title-slide-wrap {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      gap: 20px;
+    }
+
+    .title-badge-hero {
+      background: #eff6ff;
+      border: 1.5px solid #bfdbfe;
+      padding: 6px 20px;
+      border-radius: 9999px;
+      color: #1e40af;
+      font-size: 12.5px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+    }
+
+    .main-hero-title {
+      font-size: 38px;
+      font-weight: 900;
+      color: #0f2b5c;
+      line-height: 1.25;
+      max-width: 900px;
+    }
+
+    .main-hero-subtitle {
+      font-size: 16px;
+      color: #475569;
+      font-weight: 600;
+      max-width: 750px;
+    }
+
+    .crypto-chips-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      width: 100%;
+      max-width: 1020px;
+      margin: 6px 0;
+    }
+
+    .crypto-chip {
+      background: #ffffff;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 8px 14px;
+      display: flex;
+      flex-direction: column;
+      text-align: right;
+      gap: 3px;
+      box-shadow: 0 2px 8px rgba(15, 43, 92, 0.05);
+    }
+
+    .crypto-chip:hover {
+      border-color: #1e40af;
+    }
+
+    .chip-algo {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      font-weight: 800;
+      color: #1e40af;
+      direction: ltr;
+      text-align: right;
+    }
+
+    .chip-role {
+      font-size: 10.5px;
+      color: #334155;
+      font-weight: 600;
+    }
+
+    .team-container {
+      width: 100%;
+      max-width: 1020px;
+      background: #eff6ff;
+      border: 1.5px solid #bfdbfe;
+      border-radius: 10px;
+      padding: 10px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .team-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: #0f2b5c;
+      text-align: right;
+    }
+
+    .students-grid {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .student-card {
+      background: #ffffff;
+      border: 1.5px solid #93c5fd;
+      padding: 6px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 800;
+      color: #0f2b5c;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 2px 6px rgba(30, 64, 175, 0.08);
+    }
+
+    .student-card::before {
+      content: "🎓";
+      font-size: 11px;
+    }
+
+    .presenter-meta {
+      margin-top: 10px;
+      border-top: 1px solid var(--border-card);
+      padding-top: 12px;
+      display: flex;
+      gap: 36px;
+      font-size: 12.5px;
+    }
+
+    .meta-point {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .meta-point span:first-child {
+      font-size: 10.5px;
+      color: var(--text-dim);
+    }
+
+    .meta-point span:last-child {
+      font-weight: 800;
+      color: #ffffff;
+    }
+  </style>
 </head>
+
 <body>
 
-<!-- Top Navigation Bar -->
-<header class="top-bar">
-  <div class="top-left">
-    <div class="app-badge">LOCAL CONTACT P2P</div>
-    <div class="top-title">عرض المناقشة الأكاديمي: مناقشة خوارزميات التشفير</div>
+  <!-- Top Navigation Bar -->
+  <header class="top-bar">
+    <div class="top-left">
+      <div class="app-badge">LOCAL CONTACT P2P</div>
+      <div class="top-title">عرض المناقشة الأكاديمي: مناقشة خوارزميات التشفير</div>
+    </div>
+    <div class="top-right">
+      <div class="slide-counter" id="slideIndicator">1 / 12</div>
+    </div>
+    <div class="progress-container">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+  </header>
+
+  <!-- Main Presentation Viewport -->
+  <main class="deck-container">
+
+    <!-- ==================== الشريحة 1 ==================== -->
+    <section class="slide active" id="slide-1"
+      data-notes="اشرح للأساتذة في الافتتاحية أن هذا العرض يركز على مناقشة خوارزميات التشفير في مشروع LOCAL CONTACT، وهو نظام اتصال محلي P2P يعمل دون خادم مركزي. وقدم زملاءك في فريق العمل: مشعل حاجب، قحطان الشاجع، أواب النزيلي، محمد العيدروس، ومحمد العواضي، مع استعراض الخوارزميات الأساسية الست المستخدمة في النظام.">
+      <div class="title-slide-wrap">
+        <div class="title-badge-hero">🛡️ المناقشة الأكاديمية — هندسة البرمجيات والتشفير المتقدم</div>
+        <h1 class="main-hero-title">مناقشة خوارزميات التشفير في مشروع LOCAL CONTACT</h1>
+        <p class="main-hero-subtitle">التصميم الأمني وهندسة خوارزميات التشفير في نظام اتصال P2P محلي مستقل يعمل دون خادم
+          مركزي</p>
+
+        <div class="crypto-chips-grid">
+          <div class="crypto-chip">
+            <span class="chip-algo">AES-256-GCM</span>
+            <span class="chip-role">التشفير المتماثل ومصادقة البيانات وحماية السلامة (AEAD)</span>
+          </div>
+          <div class="crypto-chip">
+            <span class="chip-algo">ECDH (NIST P-256)</span>
+            <span class="chip-role">تبادل المفاتيح المنحني وتأمين Forward Secrecy</span>
+          </div>
+          <div class="crypto-chip">
+            <span class="chip-algo">HKDF-SHA256</span>
+            <span class="chip-role">دالة اشتقاق مفاتيح الجلسات المستقلة (RFC 5869)</span>
+          </div>
+          <div class="crypto-chip">
+            <span class="chip-algo">ECDSA + Keystore</span>
+            <span class="chip-role">التوقيع الرقمي وهوية الجهاز بالمعالج الآمن (TEE)</span>
+          </div>
+          <div class="crypto-chip">
+            <span class="chip-algo">SHA-256 Fingerprint</span>
+            <span class="chip-role">بصمات المفاتيح ونموذج تثبيت الهوية (TOFU)</span>
+          </div>
+          <div class="crypto-chip">
+            <span class="chip-algo">PBKDF2-HMAC-SHA256</span>
+            <span class="chip-role">اشتقاق المفتاح الشبكي المشترك للتوافق العكسي</span>
+          </div>
+        </div>
+
+        <div class="team-container">
+          <div class="team-title">👥 فريق العمل والطلاب المنفذون للمشروع:</div>
+          <div class="students-grid">
+            <div class="student-card"><span class="student-name">مشعل حاجب</span></div>
+            <div class="student-card"><span class="student-name">قحطان الشاجع</span></div>
+            <div class="student-card"><span class="student-name">أواب النزيلي</span></div>
+            <div class="student-card"><span class="student-name">محمد العيدروس</span></div>
+            <div class="student-card"><span class="student-name">محمد العواضي</span></div>
+          </div>
+        </div>
+
+        <div class="presenter-meta">
+          <div class="meta-point">
+            <span>لجنة المناقشة والتحكيم:</span>
+            <span style="color: #ffffff;">أستاذ التشفير &amp; أستاذ هندسة البرمجيات</span>
+          </div>
+          <div class="meta-point">
+            <span>بيئة العمل والتطوير:</span>
+            <span style="color: #cbd5e1;">Android SDK (API 24+) &bull; Kotlin &bull; JVM</span>
+          </div>
+          <div class="meta-point">
+            <span>حالة البناء والتحقق:</span>
+            <span style="color: #10b981;">BUILD SUCCESSFUL (33/33 Tests Passed)</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 2 ==================== -->
+    <section class="slide" id="slide-2"
+      data-notes="وضّح للدكاترة الفجوة الأمنية السابقة: التطبيق كان يحتوي على وظائف اتصال ممتازة ولكن أمنياً كان يعتمد على عبارة مرور ثابتة مشتقة عبر PBKDF2، مما جعل مفتاح التشفير ثابتاً ومشتركاً بين جميع الأجهزة وكافة الجلسات. كشف المفتاح من الـ APK كان يهدد بفك تشفير كل الحزم المسجلة.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">نقطة الانطلاق والتحليل المعماري</div>
+          <h2 class="slide-title">ما المشكلة الأمنية في التصميم السابق؟</h2>
+          <div class="slide-subtitle">تشخيص مكامن الضعف في إدارة المفاتيح وحماية الجلسات قبل التحسين</div>
+        </div>
+        <div class="status-tag status-missing">CRITICAL SECURITY GAP</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-2">
+          <div class="card" style="border-right: 4px solid var(--status-red);">
+            <div class="card-header-line">
+              <span class="card-title" style="color: #f87171;">⚠️ المخاطر ونقاط الضعف المعمارية السابقة:</span>
+              <span class="card-icon">🔓</span>
+            </div>
+            <p class="card-desc">• <strong>مفتاح شبكي موحد ثابت:</strong> اشتقاق مفتاح AES-256 عبر PBKDF2 من عبارة مرور
+              ثابتة داخل الكود.</p>
+            <p class="card-desc">• <strong>غياب تبادل المفاتيح الديناميكي:</strong> عدم وجود أي بروتوكول لتبادل المفاتيح
+              بين طرفي الاتصال (No Dynamic Key Exchange).</p>
+            <p class="card-desc">• <strong>انعدام سرية التوجيه المستقبلي:</strong> كشف عبارة المرور عبر الهندسة العكسية
+              يفك تشفير كل الاتصالات الماضية المسجلة.</p>
+            <p class="card-desc">• <strong>غياب الهوية المشفرة:</strong> الأجهزة تعتمد على معرفات عشوائية دون مفاتيح
+              رقمية للتحقق من هوية القرين.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-header-line">
+              <span class="card-title">📂 المكون البرمجي المسؤول عن الثغرة:</span>
+              <span class="card-icon">📄</span>
+            </div>
+            <div class="file-box">
+              <div class="file-path">app/src/main/java/com/example/network/LocalCryptoEngine.kt</div>
+              <div class="file-purpose">• <strong>المسؤولية:</strong> كان يتولى تشفير وفك تشفير البيانات بالإضافة إلى
+                توليد المفتاح الثابت داخلياً.</div>
+              <div class="file-why">• <strong>سبب المشكلة:</strong> الاقتران الصلب (Tightly Coupled) بين خوارزمية
+                التشفير وإدارة المفتاح الثابت داخل نفس الكلاس.</div>
+            </div>
+
+            <div class="card-desc" style="margin-top: 8px;">
+              <strong style="color: #f59e0b;">الخلاصة الهندسية:</strong> الخوارزمية (AES-GCM) كانت قوية في حد ذاتها، لكن
+              <strong>طريقة إدارة المفاتيح</strong> كانت تمثل الثغرة الجوهرية.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 3 ==================== -->
+    <section class="slide" id="slide-3"
+      data-notes="هنا يظهر دور هندسة البرمجيات: طبقنا مبدأ Single Responsibility ومبدأ Dependency Inversion عبر إنشاء واجهة KeyProvider. عزلنا مسؤولية جلب المفتاح عن محرك التشفير. أنشأنا LegacyStaticKeyProvider للحفاظ على التوافق، ومهدنا الطريق لمفاتيح الجلسات الديناميكية دون كسر الكود القديم.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">هندسة البرمجيات والتصميم المعماري</div>
+          <h2 class="slide-title">فصل إدارة المفاتيح عبر تجريد KeyProvider</h2>
+          <div class="slide-subtitle">تطبيق مبادئ SOLID ونمط Provider لعزل مسؤولية اشتقاق المفاتيح</div>
+        </div>
+        <div class="status-tag status-implemented">IMPLEMENTED &amp; JVM TESTED</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">🧩 نمط التصميم المطبق: Provider / Strategy Pattern</div>
+            <p class="card-desc">• <strong>تحقيق مبدأ DIP:</strong> محرك التشفير لم يعد يشتق المفاتيح بنفسه، بل يطلبها
+              من واجهة مجردة.</p>
+            <p class="card-desc">• <strong>فصل المسؤوليات (SRP):</strong> فصل منطق إدارة وتخزين المفاتيح عن عمليات
+              التشفير والـ Cipher.</p>
+            <p class="card-desc">• <strong>التوافق العكسي (Backward Compatibility):</strong> دعم المفتاح القديم مؤقتاً
+              لحين استكمال ترقية كافة مسارات الشبكة.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📂 الملفات المضافة والمعدلة:</div>
+            <div class="file-box">
+              <div class="file-path">app/src/main/java/com/example/network/KeyProvider.kt</div>
+              <div class="file-purpose">• <strong>واجهة برمجية:</strong> تعرّف دوال تزويد وتحديث المفاتيح النشطة.</div>
+              <div class="file-why">• <strong>الملف المساعد:</strong> يحتوي كلاس <span
+                  class="mono-term">LegacyStaticKeyProvider</span> للحفاظ على سلوك PBKDF2 القديم.</div>
+            </div>
+            <div class="file-box" style="margin-top: 6px;">
+              <div class="file-path">app/src/main/java/com/example/network/LocalCryptoEngine.kt</div>
+              <div class="file-purpose">• <strong>تعديل معماري:</strong> استقبال <span
+                  class="mono-term">KeyProvider</span> كمعامل بدلاً من تثبيت عبارة المرور داخلياً.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 4 ==================== -->
+    <section class="slide" id="slide-4"
+      data-notes="أكد لأستاذ التشفير أننا حافظنا على AES-256-GCM كخيار قياسي ممتاز لأنه نمط AEAD (يوفر السرية وسلامة البيانات معاً). وسيلة المصادقة Tag بطول 128 بت تكشف أي تلاعب بالبتات فوراً. اختبارات LocalCryptoEngineTest فحصت النصوص، كتل الملفات، والتلاعب وحققت 10/10 على JVM.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">التشفير المتماثل المعتمد</div>
+          <h2 class="slide-title">التشفير المتماثل الأساسي: AES-256-GCM</h2>
+          <div class="slide-subtitle">الحفاظ على التشفير المصادق المعتمد لضمان السرية وسلامة البيانات</div>
+        </div>
+        <div class="status-tag status-jvm-tested">JVM TESTED (10/10 PASSED)</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-3">
+          <div class="card">
+            <div class="card-title">🔒 السرية التامة (Confidentiality)</div>
+            <p class="card-desc">• مفتاح تشفير متماثل بطول <strong>256 بت</strong>.</p>
+            <p class="card-desc">• خوارزمية قياسية معتمدة من NIST (FIPS 197).</p>
+            <p class="card-desc">• معالجة سريعة ومتوازية على مستوى معالجات الأجهزة المحمولة.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🛡️ سلامة البيانات (Integrity &amp; Auth)</div>
+            <p class="card-desc">• وسم مصادقة بطول <strong>128 بت</strong> (<span class="mono-term">Authentication
+                Tag</span>).</p>
+            <p class="card-desc">• رفض فك التشفير فوراً عند تعديل بايت واحد في النص المشفر.</p>
+            <p class="card-desc">• حماية كاملة من هجمات تعديل البيانات (Bit-Flipping Attacks).</p>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🎲 العشوائية والـ Nonce</div>
+            <p class="card-desc">• رقم عشوائي فريد بطول <strong>12 بايت (96 بت)</strong> لكل حزمة رسالة.</p>
+            <p class="card-desc">• اشتقاق Nonce فريد ومحسوب لكل كتلة ملف (64KB Chunks).</p>
+            <p class="card-desc">• منع تكرار الـ Nonce تحت نفس المفتاح لتفادي انهيار أمان GCM.</p>
+          </div>
+        </div>
+
+        <div class="file-box" style="margin-top: 8px;">
+          <div class="file-path">app/src/test/java/com/example/network/LocalCryptoEngineTest.kt</div>
+          <div class="file-purpose">• <strong>حزمة الاختبار:</strong> 10 اختبارات آلية غطت: التشفير، فك التشفير، رفض
+            التلاعب بالنص المشفر، رفض التلاعب بالـ Tag، ورفض المفتاح الخاطئ.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 5 ==================== -->
+    <section class="slide" id="slide-5"
+      data-notes="شرح بروتوكول تبادل المفاتيح: أنشأنا محرك ECDH باستخدام المنحنى الإهليلجي القياسي NIST P-256 (secp256r1). الميزة الأهم هي Forward Secrecy: الطرفان يولدّان مفاتيح مؤقتة Ephemeral لكل جلسة، يحسبان السر المشترك، ثم يُتلف المفتاح الخاص فوراً. لماذا P-256؟ لأنه مدعوم أصلياً في مكتبات التشفير القياسية داخل Android و JVM دون الحاجة لمكتبات خارجية ثقيلة.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">تبادل المفاتيح الديناميكي</div>
+          <h2 class="slide-title">بروتوكول تبادل المفاتيح المنحني: ECDH (P-256)</h2>
+          <div class="slide-subtitle">توليد أسرار مشتركة مؤقتة لتحقيق سرية التوجيه المستقبلي (Forward Secrecy)</div>
+        </div>
+        <div class="status-tag status-jvm-tested">JVM TESTED (8/8 PASSED)</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">⚡ الخصائص الأمنية لمنحنى NIST P-256:</div>
+            <p class="card-desc">• <strong>المنحنى المعتمد:</strong> <span class="mono-term">secp256r1</span> (المعروف
+              بـ prime256v1 أو NIST P-256).</p>
+            <p class="card-desc">• <strong>المفاتيح المؤقتة (Ephemeral Keys):</strong> توليد زوج مفاتيح جديد لكل جلسة،
+              والتخلص من المفتاح الخاص فور حساب السر المشترك.</p>
+            <p class="card-desc">• <strong>سرية التوجيه المستقبلي:</strong> حتى لو اختُرق الجهاز مستقبلاً، يستحيل فك
+              تشفير الجلسات السابقة المسجلة لعدم وجود المفاتيح المؤقتة بالذاكرة.</p>
+            <p class="card-desc">• <strong>توافق البيئة:</strong> مدعوم في معيار JCA القياسي في أندرويد و JVM دون الحاجة
+              لمكتبات خارجية معقدة.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📂 المكون المنفذ والاختبارات:</div>
+            <div class="file-box">
+              <div class="file-path">app/src/main/java/com/example/network/EcdhEngine.kt</div>
+              <div class="file-purpose">• <strong>المسؤولية:</strong> توليد المفاتيح المؤقتة، تشفير وفك تشفير المفاتيح
+                العامة بصيغة X.509 DER، وحساب الـ Shared Secret.</div>
+              <div class="file-why">• <strong>سبب الإضافة:</strong> الانتقال من التشفير بالمفتاح الثابت إلى مفاتيح
+                الجلسات المشتقة لكل محادثة.</div>
+            </div>
+            <div class="file-box" style="margin-top: 6px;">
+              <div class="file-path">app/src/test/java/com/example/network/EcdhEngineTest.kt</div>
+              <div class="file-purpose">• <strong>الاختبار:</strong> 8 اختبارات آلية أثبتت اتفاق طرفين مستقلين على نفس
+                السر المشترك ومطابقة المفاتيح الناتجة.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 6 ==================== -->
+    <section class="slide" id="slide-6"
+      data-notes="وضّح لأستاذ التشفير لماذا نحتاج HKDF: السر المشترك الناتج عن ECDH يمثل نقطة على المنحنى، ولا يمتلك توزيعاً عشوائياً منتظماً (Uniform Distribution) يناسب مفاتيح AES. معيار RFC 5869 يطبق مرحلتين: Extract لاستخلاص العشوائية، و Expand لتوليد مفتاح AES-256 نقي مع حقن سياق الجلسة كـ Context لمنع الخلط بين الجلسات.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">دوال اشتقاق المفاتيح القياسية</div>
+          <h2 class="slide-title">اشتقاق مفاتيح الجلسات عبر HKDF-SHA256</h2>
+          <div class="slide-subtitle">تطبيق معيار RFC 5869 لتحويل السر المشترك إلى مفتاح متماثل نقي عشوائياً</div>
+        </div>
+        <div class="status-tag status-implemented">RFC 5869 COMPLIANT</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">⚙️ آليات دالة الاشتقاق (Extract-and-Expand):</div>
+            <p class="card-desc">• <strong>مرحلة الاستخلاص (Extract):</strong> تحويل ناتج الـ Shared Secret الخام إلى
+              مفتاح كبسولات عشوائي زائف (PRK) باستخدام HMAC-SHA256.</p>
+            <p class="card-desc">• <strong>مرحلة التوسيع (Expand):</strong> توليد مفتاح AES بطول 32 بايت (256 بت)
+              باستخدام مصفوفة معلومات سياقية (<span class="mono-term">Session Context Info</span>).</p>
+            <p class="card-desc">• <strong>توزيع عشوائي متجانس:</strong> إزالة أي انحياز إحصائي ناتج عن الحسابات
+              الرياضية للمنحنى الإهليلجي.</p>
+            <p class="card-desc">• <strong>عزل الجلسات:</strong> تغير سياق الجلسة ينتج مفتاحاً مختلفاً حتى لو تشابهت
+              المدخلات.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📂 الموضع البرمجي في المشروع:</div>
+            <div class="file-box">
+              <div class="file-path">app/src/main/java/com/example/network/EcdhEngine.kt</div>
+              <div class="file-purpose">• <strong>الدالة المنفذة:</strong> المسؤولة عن تنفيذ Extract و Expand داخلياً
+                لإنتاج كائن <span class="mono-term">SecretKey</span> متوافق مع خوارزمية AES.</div>
+              <div class="file-why">• <strong>سبب الاختيار:</strong> HKDF هو المعيار الذهبي المعتمد في بروتوكولات TLS
+                1.3 و Signal و IPsec.</div>
+            </div>
+            <div class="card-desc" style="margin-top: 8px;">
+              <strong style="color: #38bdf8;">النتيجة الهندسية:</strong> اشتقاق مفاتيح تشفير 256 بت تلبي أعلى معايير
+              العشوائية التشفيرية المعتمدة أكاديمياً.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 7 ==================== -->
+    <section class="slide" id="slide-7"
+      data-notes="اشرح كيف حلت هوية الجهاز مشكلة عدم وجود خادم: أنشأنا KeystoreIdentityManager لتوليد زوج مفاتيح دائم في Android Keystore المحمي بالعتاد (TEE أو StrongBox). المفتاح الخاص لا يغادر العتاد أبداً ولا يمكن تصديره أو سرقته حتى لو تم عمل روت للجهاز. يستخدم المفتاح حصراً لتوقيع حزم المصافحة بـ ECDSA. بيّن بأمانة أن هذا المكون مدمج بالكود ومصمم للأجهزة، ولم يخضع لاختبار Android Instrumented على محاكي.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">هوية الجهاز التشفيرية</div>
+          <h2 class="slide-title">حماية هوية الجهاز عبر Android Keystore</h2>
+          <div class="slide-subtitle">إدارة مفاتيح غير قابلة للتصدير مدعومة بالمعالج الآمن والتوقيع الرقمي ECDSA</div>
+        </div>
+        <div class="status-tag status-integrated">INTEGRATED IN CODE</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">🛡️ الخصائص الأمنية لمخزن المفاتيح:</div>
+            <p class="card-desc">• <strong>مفتاح الهوية الدائم:</strong> زوج مفاتيح EC secp256r1 فريد لكل جهاز يتم
+              إنشاؤه عند أول تشغيل.</p>
+            <p class="card-desc">• <strong>حماية العتاد (TEE / StrongBox):</strong> حفظ المفتاح الخاص في المعالج
+              المعزول، حيث لا يمكن استخراجه حتى مع صلاحيات Root.</p>
+            <p class="card-desc">• <strong>التوقيع الرقمي:</strong> استخدام خوارزمية <span
+                class="mono-term">SHA256withECDSA</span> لإثبات ملكية الجهاز للرسائل والمصافحة.</p>
+            <p class="card-desc">• <strong>عزل النطاق:</strong> مفتاح الهوية مخصص للمصادقة والتوقيع فقط، ولا يستخدم
+              لتشفير حزم البيانات المباشرة.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📂 المكون المسؤول وحالة التحقق:</div>
+            <div class="file-box">
+              <div class="file-path">app/src/main/java/com/example/network/KeystoreIdentityManager.kt</div>
+              <div class="file-purpose">• <strong>المسؤولية:</strong> إدارة المفتاح الدائم داخل مخزن النظام المشفر
+                وتوقيع حزم المصافحة.</div>
+              <div class="file-why">• <strong>سبب الإضافة:</strong> منح كل جهاز هوية تشفيرية لا يمكن تزويرها بدل
+                الاعتماد على معرف UUID عشوائي.</div>
+            </div>
+            <div class="file-box" style="margin-top: 6px; border-right-color: var(--status-amber);">
+              <div class="file-path" style="color: #fbbf24;">app/src/androidTest/.../KeystoreIdentityManagerTest.kt
+              </div>
+              <div class="file-purpose">• <strong>حالة التحقق:</strong> <span class="status-tag status-pending">DEVICE
+                  VERIFICATION PENDING</span> (يتطلب جهاز Android حقيقي يعمل بمعالج TEE لإثبات الأداء العتادي).</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 8 ==================== -->
+    <section class="slide" id="slide-8"
+      data-notes="شرح تحصين المصافحة: في التصميم البدائي كان التوقيع يغطي المفتاح المؤقت فقط، مما يسمح بهجمات إعادة الاستخدام في جلسة أخرى. قمنا بإنشاء Canonical Binary Format يحزم: إصدار البروتوكول، معرف المرسل، معرف المستقبل، معرف الجلسة، الطابع الزمني، والمفتاح المؤقت. أي تعديل في سياق الجلسة يكسر التوقيع الرقمي فوراً. نبه اللجنة بأن هذا يحمي من التلاعب بالسياق، لكنه ليس Replay Protection كاملاً لبيانات الشبكة.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">تحصين بروتوكول المصافحة</div>
+          <h2 class="slide-title">التوقيع الرقمي المرتبط بالسياق (Context-Bound)</h2>
+          <div class="slide-subtitle">ربط حزم المصافحة بسياق الجلسة عبر هيكل باينري حتمي لمنع هجمات الاستبدال</div>
+        </div>
+        <div class="status-tag status-jvm-tested">JVM TESTED (8/8 PASSED)</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">📦 حقول التوقيع الحتمي (Canonical Binary Layout):</div>
+            <p class="card-desc">• <strong>Domain Tag:</strong> <span
+                class="mono-term">LocalConnect::Handshake::v1</span></p>
+            <p class="card-desc">• <strong>Protocol Version:</strong> رقم الإصدار الثابت (الإصدار 2).</p>
+            <p class="card-desc">• <strong>Sender &amp; Receiver IDs:</strong> معرفات أطراف الاتصال المحددة لمنع إعادة
+              توجيه الحزمة.</p>
+            <p class="card-desc">• <strong>Session ID &amp; Timestamp:</strong> رقم الجلسة الفريد مع وقت الإرسال بالملي
+              ثانية.</p>
+            <p class="card-desc">• <strong>Ephemeral Public Key:</strong> مصفوفة البايت للمفتاح العام المؤقت للقرين.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📂 المكونات المسؤولة واختبارات الأمان:</div>
+            <div class="file-box">
+              <div class="file-path">app/src/main/java/com/example/network/HandshakeCryptoUtils.kt</div>
+              <div class="file-purpose">• <strong>المسؤولية:</strong> بناء مصفوفة البايت الحتمية وحساب بصمة المفتاح
+                العام (SHA-256 Fingerprint).</div>
+              <div class="file-why">• <strong>الفائدة الأمنية:</strong> منع المهاجم من أخذ توقيع صحيح واستخدامه في جلسة
+                أخرى أو ضد جهاز آخر.</div>
+            </div>
+            <div class="file-box" style="margin-top: 6px;">
+              <div class="file-path">app/src/test/java/com/example/network/HandshakeHardeningTest.kt</div>
+              <div class="file-purpose">• <strong>الاختبار:</strong> 8 اختبارات تأكدت من رفض التوقيع عند تعديل أي حقل من
+                حقول السياق وتأكيد سلامة التوثيق.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 9 ==================== -->
+    <section class="slide" id="slide-9"
+      data-notes="شرح نموذج TOFU: لعدم وجود خادم شهادات مركزي CA في الشبكة المحلية، نعتمد Trust On First Use. في أول اتصال، يُحفظ المفتاح العام وبصمته. في الاتصالات اللاحقة يُرفض أي تغيير. اعترف بشفافية أكاديمية أمام أستاذ التشفير: حماية MITM في الاتصال الأول تظل جزئية وليست كاملة، لأن المهاجم النشط في اللحظة الأولى يمكنه انتحال الهوية إذا لم يتأكد الطرفان بقناة خارجية (SAS أو QR Code).">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">إدارة الثقة اللامركزية</div>
+          <h2 class="slide-title">تثبيت هوية الأقران بنموذج TOFU</h2>
+          <div class="slide-subtitle">سياسة الثقة عند أول اتصال (Trust On First Use) ومصادقة البصمات الرقمية</div>
+        </div>
+        <div class="status-tag status-pending">PARTIAL MITM PROTECTION</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">🤝 آلية عمل نموذج TOFU:</div>
+            <p class="card-desc">• <strong>الاتصال الأول:</strong> تسجيل بصمة مفتاح القرين (<span
+                class="mono-term">SHA-256 Fingerprint</span>) وتخزينها محلياً بمخزن الثقة.</p>
+            <p class="card-desc">• <strong>الاتصالات اللاحقة:</strong> فحص ومطابقة البصمة القادمة مع البصمة المحفوظة؛
+              قبول الاتصال فوراً في حال التطابق.</p>
+            <p class="card-desc">• <strong>كشف انتحال الهوية:</strong> في حال تغير المفتاح العام للجهاز، يتم رفض الجلسة
+              وتنبيه النظام باحتمال وجود هجوم استبدال مفاتيح.</p>
+            <p class="card-desc">• <strong>إدارة حالات الجلسة:</strong> تتبع حالة الأمان (<span
+                class="mono-term">LEGACY, IN_PROGRESS, SECURE</span>) لمنع هجمات التراجع (Downgrade).</p>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📂 المكونات البرمجية والحدود الأمنية:</div>
+            <div class="file-box">
+              <div class="file-path">app/src/main/java/com/example/network/PeerTrustStore.kt</div>
+              <div class="file-purpose">• <strong>المسؤولية:</strong> حفظ واسترجاع بصمات الأجهزة الموثوقة ومقارنتها
+                بدقة.</div>
+            </div>
+            <div class="file-box" style="margin-top: 6px;">
+              <div class="file-path">app/src/main/java/com/example/network/PeerSessionKeyManager.kt</div>
+              <div class="file-purpose">• <strong>المسؤولية:</strong> تنسيق حالات الأمان ومهلة المصافحة (30 ثانية)
+                وإلغاء الجلسات الفاشلة.</div>
+            </div>
+            <div class="card-desc" style="margin-top: 8px; color: #fbbf24;">
+              ⚠️ <strong>الاعتراف الأكاديمي الصارم:</strong> TOFU يحمي بامتياز بدءاً من الاتصال الثاني. حماية أول اتصال
+              تظل "جزئية" لغياب مقارنة كود يدوي (SAS).
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 10 ==================== -->
+    <section class="slide" id="slide-10"
+      data-notes="هذه الشريحة تبرز النضج والأمانة الهندسية: لا ندعي أن كل شيء يستخدم Session Keys. الدردشة الثنائية المباشرة Direct Chat هي التي تستخدم مفتاح الجلسة ECDH. استكشاف الأجهزة Discovery يستخدم المفتاح الشبكي وهو أمر طبيعي ومطلوب للاكتشاف العام. أما الغرف ونقل الملفات والصوت والفيديو فما زالت تستخدم المفتاح الشبكي القديم المشترك وتحتاج مفاتيح مجموعات مستقبلاً.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">الشفافية الهندسية والواقع العملي</div>
+          <h2 class="slide-title">نطاق المفاتيح الفعلي في التطبيق (Key Scope)</h2>
+          <div class="slide-subtitle">توضيح دقيق للمسارات التي تم ترقيتها لمفاتيح الجلسات والمسارات المحتفظة بالمفتاح
+            الشبكي</div>
+        </div>
+        <div class="status-tag status-pending">PARTIAL SCOPE COVERAGE</div>
+      </div>
+
+      <div class="slide-body">
+        <table class="pres-table">
+          <thead>
+            <tr>
+              <th style="width: 25%;">نوع البيانات / المسار</th>
+              <th style="width: 25%;">المفتاح المستخدم حالياً</th>
+              <th style="width: 22%;">المنفذ والبروتوكول</th>
+              <th style="width: 28%;">الحالة المعمارية والأمنية</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>الدردشة المباشرة (Direct Chat)</strong></td>
+              <td><span class="mono-term">sessionKey</span> (ديناميكي)</td>
+              <td>8888 (UDP Unicast)</td>
+              <td><span class="status-tag status-implemented">محمي بجلسة ECDH</span></td>
+            </tr>
+            <tr>
+              <td><strong>استكشاف الأجهزة (Discovery)</strong></td>
+              <td><span class="mono-term">networkKey</span> (مشترك)</td>
+              <td>8888 (UDP Broadcast)</td>
+              <td><span class="status-tag status-jvm-tested">طبيعي (مطلوب للاستكشاف)</span></td>
+            </tr>
+            <tr>
+              <td><strong>غرف الدردشة الجماعية (Rooms)</strong></td>
+              <td><span class="mono-term">networkKey</span> (قديم)</td>
+              <td>8888 (UDP Multicast)</td>
+              <td><span class="status-tag status-pending">مسار قديم (يحتاج Group Key)</span></td>
+            </tr>
+            <tr>
+              <td><strong>نقل الملفات (File Transfer)</strong></td>
+              <td><span class="mono-term">networkKey</span> (كتل 64KB)</td>
+              <td>8891 (TCP Stream)</td>
+              <td><span class="status-tag status-pending">مسار قديم مشفر بمفتاح الشبكة</span></td>
+            </tr>
+            <tr>
+              <td><strong>المكالمات الصوتية والمرئية</strong></td>
+              <td><span class="mono-term">networkKey</span> (حزم PCM/JPEG)</td>
+              <td>8889 / 8890 (UDP)</td>
+              <td><span class="status-tag status-pending">مسار قديم مشفر بمفتاح الشبكة</span></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="file-box" style="margin-top: 6px;">
+          <div class="file-path">app/src/main/java/com/example/network/LocalP2PEngine.kt</div>
+          <div class="file-purpose">• <strong>الدمج البرمجي:</strong> دمج رسائل المصافحة (Handshake Init / Response /
+            Ack) وتمرير مفتاح الجلسة لدوال إرسال الرسائل الثنائية.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 11 ==================== -->
+    <section class="slide" id="slide-11"
+      data-notes="فصل حاسم بين نجاح الاختبارات وبين التحقق الميداني: نجاح 33 من 33 اختباراً يثبت صحة خوارزميات التشفير وتبادل المفاتيح وإدارة الجلسات في بيئة JVM. لكنه لا يعني إثبات عمل الشبكة بين جهازين أندرويد حقيقيين عبر Wi-Fi فعلي. توثيق هذا الفرق في مصفوفة TraceabilityMatrix.md هو ما يميز العمل الهندسي المنضبط.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">إثباتات الجودة ومصفوفة التتبع</div>
+          <h2 class="slide-title">ما الذي تثبته الاختبارات وما الذي لا تثبته؟</h2>
+          <div class="slide-subtitle">تحليل نتيجة 33/33 اختباراً فحصاً برمجياً على JVM والحدود الأكاديمية الصارمة</div>
+        </div>
+        <div class="status-tag status-jvm-tested">33 / 33 TESTS PASSED (100%)</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-2">
+          <div class="card" style="border-right: 4px solid var(--status-green);">
+            <div class="card-title" style="color: #34d399;">✅ ما تم إثباته برمجياً بنجاح (33/33 على JVM):</div>
+            <p class="card-desc">• <strong>LocalCryptoEngineTest (10/10):</strong> صحة AES-GCM، رفض التلاعب بالنص المشفر
+              والـ Tag، رفض المفتاح الخاطئ، ودعم JSON و UTF-8.</p>
+            <p class="card-desc">• <strong>EcdhEngineTest (8/8):</strong> اتفاق طرفين مستقلين على نفس السر المشترك
+              وتوليد مفاتيح جلسة متطابقة عبر HKDF.</p>
+            <p class="card-desc">• <strong>PeerSessionKeyManagerTest (4/4):</strong> صحة تخزين المفاتيح، انتهاء مهلة
+              المصافحة (30 ثانية)، ومنع التراجع.</p>
+            <p class="card-desc">• <strong>HandshakeHardeningTest (8/8):</strong> التوقيع الرقمي المرتبط بالسياق ومطابقة
+              بصمات TOFU.</p>
+          </div>
+
+          <div class="card" style="border-right: 4px solid var(--status-amber);">
+            <div class="card-title" style="color: #fbbf24;">⚠️ ما لم يتم التحقق منه ميدانياً بعد:</div>
+            <p class="card-desc">• <strong>الاتصال الميداني بين هاتفين حقيقيين:</strong> لم يُجرَ اختبار شبكي بين هاتفين
+              فيزيائيين عبر راوتر Wi-Fi فعلي.</p>
+            <p class="card-desc">• <strong>اختبارات Android Instrumented:</strong> لم تُنفذ على محاكي أندرويد لعدم توفر
+              بيئة عتادية في مرحلة الفحص.</p>
+            <p class="card-desc">• <strong>تكامل العتاد الحقيقي:</strong> التحقق من تخزين Keystore داخل معالج TEE يتطلب
+              جهازاً فيزيائياً متاحاً.</p>
+            <p class="card-desc">• <strong>التغطية الشاملة لجميع المتطلبات:</strong> الاختبارات غطت وحدات التشفير
+              والمصافحة فقط وليس كافة الـ 31 متطلباً.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== الشريحة 12 ==================== -->
+    <section class="slide" id="slide-12"
+      data-notes="اختم العرض بقوة وبأمانة علمية تامة: لخّص الفجوات المتبقية والموثقة كخارطة طريق مستقبلية: 1- التحقق اليدوي SAS لمنع MITM في أول اتصال. 2- Replay Protection كامل بأرقام تسلسلية للحزم. 3- فحص سلامة الملف كاملاً SHA-256. 4- Group Keys للغرف. اختم بالتأكيد على أن المشروع انتقل من كود أولي بمفتاح ثابت إلى بنية هندسية رصينة موثقة ومختبرة وقابلة للتطوير المستمر.">
+      <div class="slide-header">
+        <div class="slide-title-wrap">
+          <div class="slide-category">الأمانة الأكاديمية وخارطة الطريق</div>
+          <h2 class="slide-title">الفجوات الأمنية المتبقية والتحسينات المستقبلية</h2>
+          <div class="slide-subtitle">الاعتراف العلمي بالحدود الحالية وتحديد أولويات التطوير للمرحلة القادمة</div>
+        </div>
+        <div class="status-tag status-missing">ROADMAP &amp; FUTURE WORK</div>
+      </div>
+
+      <div class="slide-body">
+        <div class="grid-4">
+          <div class="card">
+            <div class="card-title" style="color: #f87171;">1. قناة التحقق SAS</div>
+            <p class="card-desc">• مقارنة كود بصري أو صوتي (<span class="mono-term">Short Auth String</span>) أو مسح QR
+              في أول لقاء لإغلاق ثغرة MITM الأولى نهائياً.</p>
+            <span class="status-tag status-missing" style="margin-top: 6px;">NOT IMPLEMENTED</span>
+          </div>
+
+          <div class="card">
+            <div class="card-title" style="color: #f87171;">2. حماية الـ Replay الكاملة</div>
+            <p class="card-desc">• إضافة أرقام تسلسلية (<span class="mono-term">Sequence Numbers</span>) مع نافذة منزلقة
+              (Sliding Window) لرفض الحزم القديمة المكررة في الشبكة.</p>
+            <span class="status-tag status-missing" style="margin-top: 6px;">NOT IMPLEMENTED</span>
+          </div>
+
+          <div class="card">
+            <div class="card-title" style="color: #f87171;">3. فحص الملف الكامل</div>
+            <p class="card-desc">• حساب بصمة <span class="mono-term">SHA-256</span> لكامل الملف بعد اكتمال تجميع كتل
+              .part للتأكد من سلامة المحتوى الإجمالي.</p>
+            <span class="status-tag status-missing" style="margin-top: 6px;">NOT IMPLEMENTED</span>
+          </div>
+
+          <div class="card">
+            <div class="card-title" style="color: #f87171;">4. مفاتيح المجموعات</div>
+            <p class="card-desc">• تطبيق بروتوكول شجرة المفاتيح (<span class="mono-term">Group Keys</span>) لتشفير الغرف
+              الجماعية ومسارات بث الوسائط بمفاتيح ديناميكية.</p>
+            <span class="status-tag status-missing" style="margin-top: 6px;">NOT IMPLEMENTED</span>
+          </div>
+        </div>
+
+        <div class="card"
+          style="background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.3); margin-top: 4px;">
+          <div class="card-title" style="color: #34d399;">🎓 الخلاصة الهندسية والتوصية الختامية:</div>
+          <p class="card-desc" style="color: #e2e8f0;">
+            تحول مشروع <strong>LOCAL CONTACT</strong> من تطبيق بسيط يعتمد على مفتاح ثابت مكشوف إلى <strong>نظام شبكي P2P
+              مهيكل وفق أحدث مبادئ هندسة البرمجيات</strong> (SRS, Baseline, RTM) ومحصن بنواة تشفير معتمدة (AES-256-GCM,
+            ECDH P-256, HKDF, Keystore, TOFU) مع مصفوفة تتبع صارمة تفصل بوضوح بين ما تم إثباته برمجياً وما يزال قيد
+            التحسين المستقبلي.
+          </p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Speaker Notes Slide-out Panel -->
+  <div class="speaker-notes-panel" id="speakerNotesPanel">
+    <div class="notes-header">
+      <span>🎙️ ملاحظات المتحدث للمناقشة الشفوية أمام اللجنة (Speaker Notes):</span>
+    </div>
+    <div class="notes-content" id="notesText">
+      ملاحظات الشريحة الحالية...
+    </div>
   </div>
-  <div class="top-right">
-    <div class="slide-counter" id="slideIndicator">1 / 12</div>
-  </div>
-  <div class="progress-container">
-    <div class="progress-bar" id="progressBar"></div>
-  </div>
-</header>
 
-<!-- Main Presentation Viewport -->
-<main class="deck-container">
-
-  <!-- ==================== الشريحة 1 ==================== -->
-  <section class="slide active" id="slide-1" data-notes="اشرح للأساتذة في الافتتاحية أن هذا العرض يركز على مناقشة خوارزميات التشفير في مشروع LOCAL CONTACT، وهو نظام اتصال محلي P2P يعمل دون خادم مركزي. وقدم زملاءك في فريق العمل: مشعل حاجب، قحطان الشاجع، أواب النزيلي، محمد العيدروس، ومحمد العواضي، مع استعراض الخوارزميات الأساسية الست المستخدمة في النظام.">
-    <div class="title-slide-wrap">
-      <div class="title-badge-hero">🛡️ المناقشة الأكاديمية — هندسة البرمجيات والتشفير المتقدم</div>
-      <h1 class="main-hero-title">مناقشة خوارزميات التشفير في مشروع LOCAL CONTACT</h1>
-      <p class="main-hero-subtitle">التصميم الأمني وهندسة خوارزميات التشفير في نظام اتصال P2P محلي مستقل يعمل دون خادم مركزي</p>
-
-      <div class="crypto-chips-grid">
-        <div class="crypto-chip">
-          <span class="chip-algo">AES-256-GCM</span>
-          <span class="chip-role">التشفير المتماثل ومصادقة البيانات وحماية السلامة (AEAD)</span>
-        </div>
-        <div class="crypto-chip">
-          <span class="chip-algo">ECDH (NIST P-256)</span>
-          <span class="chip-role">تبادل المفاتيح المنحني وتأمين Forward Secrecy</span>
-        </div>
-        <div class="crypto-chip">
-          <span class="chip-algo">HKDF-SHA256</span>
-          <span class="chip-role">دالة اشتقاق مفاتيح الجلسات المستقلة (RFC 5869)</span>
-        </div>
-        <div class="crypto-chip">
-          <span class="chip-algo">ECDSA + Keystore</span>
-          <span class="chip-role">التوقيع الرقمي وهوية الجهاز بالمعالج الآمن (TEE)</span>
-        </div>
-        <div class="crypto-chip">
-          <span class="chip-algo">SHA-256 Fingerprint</span>
-          <span class="chip-role">بصمات المفاتيح ونموذج تثبيت الهوية (TOFU)</span>
-        </div>
-        <div class="crypto-chip">
-          <span class="chip-algo">PBKDF2-HMAC-SHA256</span>
-          <span class="chip-role">اشتقاق المفتاح الشبكي المشترك للتوافق العكسي</span>
-        </div>
-      </div>
-
-      <div class="team-container">
-        <div class="team-title">👥 فريق العمل والطلاب المنفذون للمشروع:</div>
-        <div class="students-grid">
-          <div class="student-card"><span class="student-name">مشعل حاجب</span></div>
-          <div class="student-card"><span class="student-name">قحطان الشاجع</span></div>
-          <div class="student-card"><span class="student-name">أواب النزيلي</span></div>
-          <div class="student-card"><span class="student-name">محمد العيدروس</span></div>
-          <div class="student-card"><span class="student-name">محمد العواضي</span></div>
-        </div>
-      </div>
-
-      <div class="presenter-meta">
-        <div class="meta-point">
-          <span>لجنة المناقشة والتحكيم:</span>
-          <span style="color: #ffffff;">أستاذ التشفير &amp; أستاذ هندسة البرمجيات</span>
-        </div>
-        <div class="meta-point">
-          <span>بيئة العمل والتطوير:</span>
-          <span style="color: #cbd5e1;">Android SDK (API 24+) &bull; Kotlin &bull; JVM</span>
-        </div>
-        <div class="meta-point">
-          <span>حالة البناء والتحقق:</span>
-          <span style="color: #10b981;">BUILD SUCCESSFUL (33/33 Tests Passed)</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 2 ==================== -->
-  <section class="slide" id="slide-2" data-notes="وضّح للدكاترة الفجوة الأمنية السابقة: التطبيق كان يحتوي على وظائف اتصال ممتازة ولكن أمنياً كان يعتمد على عبارة مرور ثابتة مشتقة عبر PBKDF2، مما جعل مفتاح التشفير ثابتاً ومشتركاً بين جميع الأجهزة وكافة الجلسات. كشف المفتاح من الـ APK كان يهدد بفك تشفير كل الحزم المسجلة.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">نقطة الانطلاق والتحليل المعماري</div>
-        <h2 class="slide-title">ما المشكلة الأمنية في التصميم السابق؟</h2>
-        <div class="slide-subtitle">تشخيص مكامن الضعف في إدارة المفاتيح وحماية الجلسات قبل التحسين</div>
-      </div>
-      <div class="status-tag status-missing">CRITICAL SECURITY GAP</div>
+  <!-- Bottom Presentation Controls -->
+  <footer class="bottom-bar">
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <button class="nav-btn" id="prevBtn" onclick="changeSlide(-1)">❮ الشريحة السابقة</button>
+      <button class="nav-btn" id="nextBtn" onclick="changeSlide(1)">الشريحة التالية ❯</button>
+      <button class="nav-btn toggle-notes-btn" id="notesToggleBtn" onclick="toggleSpeakerNotes()">🎙️ ملاحظات المناقشة
+        (N)</button>
     </div>
 
-    <div class="slide-body">
-      <div class="grid-2">
-        <div class="card" style="border-right: 4px solid var(--status-red);">
-          <div class="card-header-line">
-            <span class="card-title" style="color: #f87171;">⚠️ المخاطر ونقاط الضعف المعمارية السابقة:</span>
-            <span class="card-icon">🔓</span>
-          </div>
-          <p class="card-desc">• <strong>مفتاح شبكي موحد ثابت:</strong> اشتقاق مفتاح AES-256 عبر PBKDF2 من عبارة مرور ثابتة داخل الكود.</p>
-          <p class="card-desc">• <strong>غياب تبادل المفاتيح الديناميكي:</strong> عدم وجود أي بروتوكول لتبادل المفاتيح بين طرفي الاتصال (No Dynamic Key Exchange).</p>
-          <p class="card-desc">• <strong>انعدام سرية التوجيه المستقبلي:</strong> كشف عبارة المرور عبر الهندسة العكسية يفك تشفير كل الاتصالات الماضية المسجلة.</p>
-          <p class="card-desc">• <strong>غياب الهوية المشفرة:</strong> الأجهزة تعتمد على معرفات عشوائية دون مفاتيح رقمية للتحقق من هوية القرين.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-header-line">
-            <span class="card-title">📂 المكون البرمجي المسؤول عن الثغرة:</span>
-            <span class="card-icon">📄</span>
-          </div>
-          <div class="file-box">
-            <div class="file-path">app/src/main/java/com/example/network/LocalCryptoEngine.kt</div>
-            <div class="file-purpose">• <strong>المسؤولية:</strong> كان يتولى تشفير وفك تشفير البيانات بالإضافة إلى توليد المفتاح الثابت داخلياً.</div>
-            <div class="file-why">• <strong>سبب المشكلة:</strong> الاقتران الصلب (Tightly Coupled) بين خوارزمية التشفير وإدارة المفتاح الثابت داخل نفس الكلاس.</div>
-          </div>
-
-          <div class="card-desc" style="margin-top: 8px;">
-            <strong style="color: #f59e0b;">الخلاصة الهندسية:</strong> الخوارزمية (AES-GCM) كانت قوية في حد ذاتها، لكن <strong>طريقة إدارة المفاتيح</strong> كانت تمثل الثغرة الجوهرية.
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 3 ==================== -->
-  <section class="slide" id="slide-3" data-notes="هنا يظهر دور هندسة البرمجيات: طبقنا مبدأ Single Responsibility ومبدأ Dependency Inversion عبر إنشاء واجهة KeyProvider. عزلنا مسؤولية جلب المفتاح عن محرك التشفير. أنشأنا LegacyStaticKeyProvider للحفاظ على التوافق، ومهدنا الطريق لمفاتيح الجلسات الديناميكية دون كسر الكود القديم.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">هندسة البرمجيات والتصميم المعماري</div>
-        <h2 class="slide-title">فصل إدارة المفاتيح عبر تجريد KeyProvider</h2>
-        <div class="slide-subtitle">تطبيق مبادئ SOLID ونمط Provider لعزل مسؤولية اشتقاق المفاتيح</div>
-      </div>
-      <div class="status-tag status-implemented">IMPLEMENTED &amp; JVM TESTED</div>
+    <div class="keyboard-hint">
+      [ ◄ / ► : للتنقل ] &nbsp;|&nbsp; [ مسافة : تقدم ] &nbsp;|&nbsp; [ N : الملاحظات ] &nbsp;|&nbsp; [ F : ملء الشاشة ]
     </div>
 
-    <div class="slide-body">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">🧩 نمط التصميم المطبق: Provider / Strategy Pattern</div>
-          <p class="card-desc">• <strong>تحقيق مبدأ DIP:</strong> محرك التشفير لم يعد يشتق المفاتيح بنفسه، بل يطلبها من واجهة مجردة.</p>
-          <p class="card-desc">• <strong>فصل المسؤوليات (SRP):</strong> فصل منطق إدارة وتخزين المفاتيح عن عمليات التشفير والـ Cipher.</p>
-          <p class="card-desc">• <strong>التوافق العكسي (Backward Compatibility):</strong> دعم المفتاح القديم مؤقتاً لحين استكمال ترقية كافة مسارات الشبكة.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-title">📂 الملفات المضافة والمعدلة:</div>
-          <div class="file-box">
-            <div class="file-path">app/src/main/java/com/example/network/KeyProvider.kt</div>
-            <div class="file-purpose">• <strong>واجهة برمجية:</strong> تعرّف دوال تزويد وتحديث المفاتيح النشطة.</div>
-            <div class="file-why">• <strong>الملف المساعد:</strong> يحتوي كلاس <span class="mono-term">LegacyStaticKeyProvider</span> للحفاظ على سلوك PBKDF2 القديم.</div>
-          </div>
-          <div class="file-box" style="margin-top: 6px;">
-            <div class="file-path">app/src/main/java/com/example/network/LocalCryptoEngine.kt</div>
-            <div class="file-purpose">• <strong>تعديل معماري:</strong> استقبال <span class="mono-term">KeyProvider</span> كمعامل بدلاً من تثبيت عبارة المرور داخلياً.</div>
-          </div>
-        </div>
-      </div>
+    <div>
+      <button class="nav-btn" onclick="toggleFullscreen()">⛶ شاشة كاملة</button>
     </div>
-  </section>
+  </footer>
 
-  <!-- ==================== الشريحة 4 ==================== -->
-  <section class="slide" id="slide-4" data-notes="أكد لأستاذ التشفير أننا حافظنا على AES-256-GCM كخيار قياسي ممتاز لأنه نمط AEAD (يوفر السرية وسلامة البيانات معاً). وسيلة المصادقة Tag بطول 128 بت تكشف أي تلاعب بالبتات فوراً. اختبارات LocalCryptoEngineTest فحصت النصوص، كتل الملفات، والتلاعب وحققت 10/10 على JVM.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">التشفير المتماثل المعتمد</div>
-        <h2 class="slide-title">التشفير المتماثل الأساسي: AES-256-GCM</h2>
-        <div class="slide-subtitle">الحفاظ على التشفير المصادق المعتمد لضمان السرية وسلامة البيانات</div>
-      </div>
-      <div class="status-tag status-jvm-tested">JVM TESTED (10/10 PASSED)</div>
-    </div>
+  <script>
+    let currentSlide = 1;
+    const totalSlides = 12;
 
-    <div class="slide-body">
-      <div class="grid-3">
-        <div class="card">
-          <div class="card-title">🔒 السرية التامة (Confidentiality)</div>
-          <p class="card-desc">• مفتاح تشفير متماثل بطول <strong>256 بت</strong>.</p>
-          <p class="card-desc">• خوارزمية قياسية معتمدة من NIST (FIPS 197).</p>
-          <p class="card-desc">• معالجة سريعة ومتوازية على مستوى معالجات الأجهزة المحمولة.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-title">🛡️ سلامة البيانات (Integrity &amp; Auth)</div>
-          <p class="card-desc">• وسم مصادقة بطول <strong>128 بت</strong> (<span class="mono-term">Authentication Tag</span>).</p>
-          <p class="card-desc">• رفض فك التشفير فوراً عند تعديل بايت واحد في النص المشفر.</p>
-          <p class="card-desc">• حماية كاملة من هجمات تعديل البيانات (Bit-Flipping Attacks).</p>
-        </div>
-
-        <div class="card">
-          <div class="card-title">🎲 العشوائية والـ Nonce</div>
-          <p class="card-desc">• رقم عشوائي فريد بطول <strong>12 بايت (96 بت)</strong> لكل حزمة رسالة.</p>
-          <p class="card-desc">• اشتقاق Nonce فريد ومحسوب لكل كتلة ملف (64KB Chunks).</p>
-          <p class="card-desc">• منع تكرار الـ Nonce تحت نفس المفتاح لتفادي انهيار أمان GCM.</p>
-        </div>
-      </div>
-
-      <div class="file-box" style="margin-top: 8px;">
-        <div class="file-path">app/src/test/java/com/example/network/LocalCryptoEngineTest.kt</div>
-        <div class="file-purpose">• <strong>حزمة الاختبار:</strong> 10 اختبارات آلية غطت: التشفير، فك التشفير، رفض التلاعب بالنص المشفر، رفض التلاعب بالـ Tag، ورفض المفتاح الخاطئ.</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 5 ==================== -->
-  <section class="slide" id="slide-5" data-notes="شرح بروتوكول تبادل المفاتيح: أنشأنا محرك ECDH باستخدام المنحنى الإهليلجي القياسي NIST P-256 (secp256r1). الميزة الأهم هي Forward Secrecy: الطرفان يولدّان مفاتيح مؤقتة Ephemeral لكل جلسة، يحسبان السر المشترك، ثم يُتلف المفتاح الخاص فوراً. لماذا P-256؟ لأنه مدعوم أصلياً في مكتبات التشفير القياسية داخل Android و JVM دون الحاجة لمكتبات خارجية ثقيلة.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">تبادل المفاتيح الديناميكي</div>
-        <h2 class="slide-title">بروتوكول تبادل المفاتيح المنحني: ECDH (P-256)</h2>
-        <div class="slide-subtitle">توليد أسرار مشتركة مؤقتة لتحقيق سرية التوجيه المستقبلي (Forward Secrecy)</div>
-      </div>
-      <div class="status-tag status-jvm-tested">JVM TESTED (8/8 PASSED)</div>
-    </div>
-
-    <div class="slide-body">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">⚡ الخصائص الأمنية لمنحنى NIST P-256:</div>
-          <p class="card-desc">• <strong>المنحنى المعتمد:</strong> <span class="mono-term">secp256r1</span> (المعروف بـ prime256v1 أو NIST P-256).</p>
-          <p class="card-desc">• <strong>المفاتيح المؤقتة (Ephemeral Keys):</strong> توليد زوج مفاتيح جديد لكل جلسة، والتخلص من المفتاح الخاص فور حساب السر المشترك.</p>
-          <p class="card-desc">• <strong>سرية التوجيه المستقبلي:</strong> حتى لو اختُرق الجهاز مستقبلاً، يستحيل فك تشفير الجلسات السابقة المسجلة لعدم وجود المفاتيح المؤقتة بالذاكرة.</p>
-          <p class="card-desc">• <strong>توافق البيئة:</strong> مدعوم في معيار JCA القياسي في أندرويد و JVM دون الحاجة لمكتبات خارجية معقدة.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-title">📂 المكون المنفذ والاختبارات:</div>
-          <div class="file-box">
-            <div class="file-path">app/src/main/java/com/example/network/EcdhEngine.kt</div>
-            <div class="file-purpose">• <strong>المسؤولية:</strong> توليد المفاتيح المؤقتة، تشفير وفك تشفير المفاتيح العامة بصيغة X.509 DER، وحساب الـ Shared Secret.</div>
-            <div class="file-why">• <strong>سبب الإضافة:</strong> الانتقال من التشفير بالمفتاح الثابت إلى مفاتيح الجلسات المشتقة لكل محادثة.</div>
-          </div>
-          <div class="file-box" style="margin-top: 6px;">
-            <div class="file-path">app/src/test/java/com/example/network/EcdhEngineTest.kt</div>
-            <div class="file-purpose">• <strong>الاختبار:</strong> 8 اختبارات آلية أثبتت اتفاق طرفين مستقلين على نفس السر المشترك ومطابقة المفاتيح الناتجة.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 6 ==================== -->
-  <section class="slide" id="slide-6" data-notes="وضّح لأستاذ التشفير لماذا نحتاج HKDF: السر المشترك الناتج عن ECDH يمثل نقطة على المنحنى، ولا يمتلك توزيعاً عشوائياً منتظماً (Uniform Distribution) يناسب مفاتيح AES. معيار RFC 5869 يطبق مرحلتين: Extract لاستخلاص العشوائية، و Expand لتوليد مفتاح AES-256 نقي مع حقن سياق الجلسة كـ Context لمنع الخلط بين الجلسات.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">دوال اشتقاق المفاتيح القياسية</div>
-        <h2 class="slide-title">اشتقاق مفاتيح الجلسات عبر HKDF-SHA256</h2>
-        <div class="slide-subtitle">تطبيق معيار RFC 5869 لتحويل السر المشترك إلى مفتاح متماثل نقي عشوائياً</div>
-      </div>
-      <div class="status-tag status-implemented">RFC 5869 COMPLIANT</div>
-    </div>
-
-    <div class="slide-body">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">⚙️ آليات دالة الاشتقاق (Extract-and-Expand):</div>
-          <p class="card-desc">• <strong>مرحلة الاستخلاص (Extract):</strong> تحويل ناتج الـ Shared Secret الخام إلى مفتاح كبسولات عشوائي زائف (PRK) باستخدام HMAC-SHA256.</p>
-          <p class="card-desc">• <strong>مرحلة التوسيع (Expand):</strong> توليد مفتاح AES بطول 32 بايت (256 بت) باستخدام مصفوفة معلومات سياقية (<span class="mono-term">Session Context Info</span>).</p>
-          <p class="card-desc">• <strong>توزيع عشوائي متجانس:</strong> إزالة أي انحياز إحصائي ناتج عن الحسابات الرياضية للمنحنى الإهليلجي.</p>
-          <p class="card-desc">• <strong>عزل الجلسات:</strong> تغير سياق الجلسة ينتج مفتاحاً مختلفاً حتى لو تشابهت المدخلات.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-title">📂 الموضع البرمجي في المشروع:</div>
-          <div class="file-box">
-            <div class="file-path">app/src/main/java/com/example/network/EcdhEngine.kt</div>
-            <div class="file-purpose">• <strong>الدالة المنفذة:</strong> المسؤولة عن تنفيذ Extract و Expand داخلياً لإنتاج كائن <span class="mono-term">SecretKey</span> متوافق مع خوارزمية AES.</div>
-            <div class="file-why">• <strong>سبب الاختيار:</strong> HKDF هو المعيار الذهبي المعتمد في بروتوكولات TLS 1.3 و Signal و IPsec.</div>
-          </div>
-          <div class="card-desc" style="margin-top: 8px;">
-            <strong style="color: #38bdf8;">النتيجة الهندسية:</strong> اشتقاق مفاتيح تشفير 256 بت تلبي أعلى معايير العشوائية التشفيرية المعتمدة أكاديمياً.
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 7 ==================== -->
-  <section class="slide" id="slide-7" data-notes="اشرح كيف حلت هوية الجهاز مشكلة عدم وجود خادم: أنشأنا KeystoreIdentityManager لتوليد زوج مفاتيح دائم في Android Keystore المحمي بالعتاد (TEE أو StrongBox). المفتاح الخاص لا يغادر العتاد أبداً ولا يمكن تصديره أو سرقته حتى لو تم عمل روت للجهاز. يستخدم المفتاح حصراً لتوقيع حزم المصافحة بـ ECDSA. بيّن بأمانة أن هذا المكون مدمج بالكود ومصمم للأجهزة، ولم يخضع لاختبار Android Instrumented على محاكي.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">هوية الجهاز التشفيرية</div>
-        <h2 class="slide-title">حماية هوية الجهاز عبر Android Keystore</h2>
-        <div class="slide-subtitle">إدارة مفاتيح غير قابلة للتصدير مدعومة بالمعالج الآمن والتوقيع الرقمي ECDSA</div>
-      </div>
-      <div class="status-tag status-integrated">INTEGRATED IN CODE</div>
-    </div>
-
-    <div class="slide-body">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">🛡️ الخصائص الأمنية لمخزن المفاتيح:</div>
-          <p class="card-desc">• <strong>مفتاح الهوية الدائم:</strong> زوج مفاتيح EC secp256r1 فريد لكل جهاز يتم إنشاؤه عند أول تشغيل.</p>
-          <p class="card-desc">• <strong>حماية العتاد (TEE / StrongBox):</strong> حفظ المفتاح الخاص في المعالج المعزول، حيث لا يمكن استخراجه حتى مع صلاحيات Root.</p>
-          <p class="card-desc">• <strong>التوقيع الرقمي:</strong> استخدام خوارزمية <span class="mono-term">SHA256withECDSA</span> لإثبات ملكية الجهاز للرسائل والمصافحة.</p>
-          <p class="card-desc">• <strong>عزل النطاق:</strong> مفتاح الهوية مخصص للمصادقة والتوقيع فقط، ولا يستخدم لتشفير حزم البيانات المباشرة.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-title">📂 المكون المسؤول وحالة التحقق:</div>
-          <div class="file-box">
-            <div class="file-path">app/src/main/java/com/example/network/KeystoreIdentityManager.kt</div>
-            <div class="file-purpose">• <strong>المسؤولية:</strong> إدارة المفتاح الدائم داخل مخزن النظام المشفر وتوقيع حزم المصافحة.</div>
-            <div class="file-why">• <strong>سبب الإضافة:</strong> منح كل جهاز هوية تشفيرية لا يمكن تزويرها بدل الاعتماد على معرف UUID عشوائي.</div>
-          </div>
-          <div class="file-box" style="margin-top: 6px; border-right-color: var(--status-amber);">
-            <div class="file-path" style="color: #fbbf24;">app/src/androidTest/.../KeystoreIdentityManagerTest.kt</div>
-            <div class="file-purpose">• <strong>حالة التحقق:</strong> <span class="status-tag status-pending">DEVICE VERIFICATION PENDING</span> (يتطلب جهاز Android حقيقي يعمل بمعالج TEE لإثبات الأداء العتادي).</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 8 ==================== -->
-  <section class="slide" id="slide-8" data-notes="شرح تحصين المصافحة: في التصميم البدائي كان التوقيع يغطي المفتاح المؤقت فقط، مما يسمح بهجمات إعادة الاستخدام في جلسة أخرى. قمنا بإنشاء Canonical Binary Format يحزم: إصدار البروتوكول، معرف المرسل، معرف المستقبل، معرف الجلسة، الطابع الزمني، والمفتاح المؤقت. أي تعديل في سياق الجلسة يكسر التوقيع الرقمي فوراً. نبه اللجنة بأن هذا يحمي من التلاعب بالسياق، لكنه ليس Replay Protection كاملاً لبيانات الشبكة.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">تحصين بروتوكول المصافحة</div>
-        <h2 class="slide-title">التوقيع الرقمي المرتبط بالسياق (Context-Bound)</h2>
-        <div class="slide-subtitle">ربط حزم المصافحة بسياق الجلسة عبر هيكل باينري حتمي لمنع هجمات الاستبدال</div>
-      </div>
-      <div class="status-tag status-jvm-tested">JVM TESTED (8/8 PASSED)</div>
-    </div>
-
-    <div class="slide-body">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">📦 حقول التوقيع الحتمي (Canonical Binary Layout):</div>
-          <p class="card-desc">• <strong>Domain Tag:</strong> <span class="mono-term">LocalConnect::Handshake::v1</span></p>
-          <p class="card-desc">• <strong>Protocol Version:</strong> رقم الإصدار الثابت (الإصدار 2).</p>
-          <p class="card-desc">• <strong>Sender &amp; Receiver IDs:</strong> معرفات أطراف الاتصال المحددة لمنع إعادة توجيه الحزمة.</p>
-          <p class="card-desc">• <strong>Session ID &amp; Timestamp:</strong> رقم الجلسة الفريد مع وقت الإرسال بالملي ثانية.</p>
-          <p class="card-desc">• <strong>Ephemeral Public Key:</strong> مصفوفة البايت للمفتاح العام المؤقت للقرين.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-title">📂 المكونات المسؤولة واختبارات الأمان:</div>
-          <div class="file-box">
-            <div class="file-path">app/src/main/java/com/example/network/HandshakeCryptoUtils.kt</div>
-            <div class="file-purpose">• <strong>المسؤولية:</strong> بناء مصفوفة البايت الحتمية وحساب بصمة المفتاح العام (SHA-256 Fingerprint).</div>
-            <div class="file-why">• <strong>الفائدة الأمنية:</strong> منع المهاجم من أخذ توقيع صحيح واستخدامه في جلسة أخرى أو ضد جهاز آخر.</div>
-          </div>
-          <div class="file-box" style="margin-top: 6px;">
-            <div class="file-path">app/src/test/java/com/example/network/HandshakeHardeningTest.kt</div>
-            <div class="file-purpose">• <strong>الاختبار:</strong> 8 اختبارات تأكدت من رفض التوقيع عند تعديل أي حقل من حقول السياق وتأكيد سلامة التوثيق.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 9 ==================== -->
-  <section class="slide" id="slide-9" data-notes="شرح نموذج TOFU: لعدم وجود خادم شهادات مركزي CA في الشبكة المحلية، نعتمد Trust On First Use. في أول اتصال، يُحفظ المفتاح العام وبصمته. في الاتصالات اللاحقة يُرفض أي تغيير. اعترف بشفافية أكاديمية أمام أستاذ التشفير: حماية MITM في الاتصال الأول تظل جزئية وليست كاملة، لأن المهاجم النشط في اللحظة الأولى يمكنه انتحال الهوية إذا لم يتأكد الطرفان بقناة خارجية (SAS أو QR Code).">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">إدارة الثقة اللامركزية</div>
-        <h2 class="slide-title">تثبيت هوية الأقران بنموذج TOFU</h2>
-        <div class="slide-subtitle">سياسة الثقة عند أول اتصال (Trust On First Use) ومصادقة البصمات الرقمية</div>
-      </div>
-      <div class="status-tag status-pending">PARTIAL MITM PROTECTION</div>
-    </div>
-
-    <div class="slide-body">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">🤝 آلية عمل نموذج TOFU:</div>
-          <p class="card-desc">• <strong>الاتصال الأول:</strong> تسجيل بصمة مفتاح القرين (<span class="mono-term">SHA-256 Fingerprint</span>) وتخزينها محلياً بمخزن الثقة.</p>
-          <p class="card-desc">• <strong>الاتصالات اللاحقة:</strong> فحص ومطابقة البصمة القادمة مع البصمة المحفوظة؛ قبول الاتصال فوراً في حال التطابق.</p>
-          <p class="card-desc">• <strong>كشف انتحال الهوية:</strong> في حال تغير المفتاح العام للجهاز، يتم رفض الجلسة وتنبيه النظام باحتمال وجود هجوم استبدال مفاتيح.</p>
-          <p class="card-desc">• <strong>إدارة حالات الجلسة:</strong> تتبع حالة الأمان (<span class="mono-term">LEGACY, IN_PROGRESS, SECURE</span>) لمنع هجمات التراجع (Downgrade).</p>
-        </div>
-
-        <div class="card">
-          <div class="card-title">📂 المكونات البرمجية والحدود الأمنية:</div>
-          <div class="file-box">
-            <div class="file-path">app/src/main/java/com/example/network/PeerTrustStore.kt</div>
-            <div class="file-purpose">• <strong>المسؤولية:</strong> حفظ واسترجاع بصمات الأجهزة الموثوقة ومقارنتها بدقة.</div>
-          </div>
-          <div class="file-box" style="margin-top: 6px;">
-            <div class="file-path">app/src/main/java/com/example/network/PeerSessionKeyManager.kt</div>
-            <div class="file-purpose">• <strong>المسؤولية:</strong> تنسيق حالات الأمان ومهلة المصافحة (30 ثانية) وإلغاء الجلسات الفاشلة.</div>
-          </div>
-          <div class="card-desc" style="margin-top: 8px; color: #fbbf24;">
-            ⚠️ <strong>الاعتراف الأكاديمي الصارم:</strong> TOFU يحمي بامتياز بدءاً من الاتصال الثاني. حماية أول اتصال تظل "جزئية" لغياب مقارنة كود يدوي (SAS).
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 10 ==================== -->
-  <section class="slide" id="slide-10" data-notes="هذه الشريحة تبرز النضج والأمانة الهندسية: لا ندعي أن كل شيء يستخدم Session Keys. الدردشة الثنائية المباشرة Direct Chat هي التي تستخدم مفتاح الجلسة ECDH. استكشاف الأجهزة Discovery يستخدم المفتاح الشبكي وهو أمر طبيعي ومطلوب للاكتشاف العام. أما الغرف ونقل الملفات والصوت والفيديو فما زالت تستخدم المفتاح الشبكي القديم المشترك وتحتاج مفاتيح مجموعات مستقبلاً.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">الشفافية الهندسية والواقع العملي</div>
-        <h2 class="slide-title">نطاق المفاتيح الفعلي في التطبيق (Key Scope)</h2>
-        <div class="slide-subtitle">توضيح دقيق للمسارات التي تم ترقيتها لمفاتيح الجلسات والمسارات المحتفظة بالمفتاح الشبكي</div>
-      </div>
-      <div class="status-tag status-pending">PARTIAL SCOPE COVERAGE</div>
-    </div>
-
-    <div class="slide-body">
-      <table class="pres-table">
-        <thead>
-          <tr>
-            <th style="width: 25%;">نوع البيانات / المسار</th>
-            <th style="width: 25%;">المفتاح المستخدم حالياً</th>
-            <th style="width: 22%;">المنفذ والبروتوكول</th>
-            <th style="width: 28%;">الحالة المعمارية والأمنية</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>الدردشة المباشرة (Direct Chat)</strong></td>
-            <td><span class="mono-term">sessionKey</span> (ديناميكي)</td>
-            <td>8888 (UDP Unicast)</td>
-            <td><span class="status-tag status-implemented">محمي بجلسة ECDH</span></td>
-          </tr>
-          <tr>
-            <td><strong>استكشاف الأجهزة (Discovery)</strong></td>
-            <td><span class="mono-term">networkKey</span> (مشترك)</td>
-            <td>8888 (UDP Broadcast)</td>
-            <td><span class="status-tag status-jvm-tested">طبيعي (مطلوب للاستكشاف)</span></td>
-          </tr>
-          <tr>
-            <td><strong>غرف الدردشة الجماعية (Rooms)</strong></td>
-            <td><span class="mono-term">networkKey</span> (قديم)</td>
-            <td>8888 (UDP Multicast)</td>
-            <td><span class="status-tag status-pending">مسار قديم (يحتاج Group Key)</span></td>
-          </tr>
-          <tr>
-            <td><strong>نقل الملفات (File Transfer)</strong></td>
-            <td><span class="mono-term">networkKey</span> (كتل 64KB)</td>
-            <td>8891 (TCP Stream)</td>
-            <td><span class="status-tag status-pending">مسار قديم مشفر بمفتاح الشبكة</span></td>
-          </tr>
-          <tr>
-            <td><strong>المكالمات الصوتية والمرئية</strong></td>
-            <td><span class="mono-term">networkKey</span> (حزم PCM/JPEG)</td>
-            <td>8889 / 8890 (UDP)</td>
-            <td><span class="status-tag status-pending">مسار قديم مشفر بمفتاح الشبكة</span></td>
-          </tr>
-        </tbody>
-      </table>
-
-      <div class="file-box" style="margin-top: 6px;">
-        <div class="file-path">app/src/main/java/com/example/network/LocalP2PEngine.kt</div>
-        <div class="file-purpose">• <strong>الدمج البرمجي:</strong> دمج رسائل المصافحة (Handshake Init / Response / Ack) وتمرير مفتاح الجلسة لدوال إرسال الرسائل الثنائية.</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 11 ==================== -->
-  <section class="slide" id="slide-11" data-notes="فصل حاسم بين نجاح الاختبارات وبين التحقق الميداني: نجاح 33 من 33 اختباراً يثبت صحة خوارزميات التشفير وتبادل المفاتيح وإدارة الجلسات في بيئة JVM. لكنه لا يعني إثبات عمل الشبكة بين جهازين أندرويد حقيقيين عبر Wi-Fi فعلي. توثيق هذا الفرق في مصفوفة TraceabilityMatrix.md هو ما يميز العمل الهندسي المنضبط.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">إثباتات الجودة ومصفوفة التتبع</div>
-        <h2 class="slide-title">ما الذي تثبته الاختبارات وما الذي لا تثبته؟</h2>
-        <div class="slide-subtitle">تحليل نتيجة 33/33 اختباراً فحصاً برمجياً على JVM والحدود الأكاديمية الصارمة</div>
-      </div>
-      <div class="status-tag status-jvm-tested">33 / 33 TESTS PASSED (100%)</div>
-    </div>
-
-    <div class="slide-body">
-      <div class="grid-2">
-        <div class="card" style="border-right: 4px solid var(--status-green);">
-          <div class="card-title" style="color: #34d399;">✅ ما تم إثباته برمجياً بنجاح (33/33 على JVM):</div>
-          <p class="card-desc">• <strong>LocalCryptoEngineTest (10/10):</strong> صحة AES-GCM، رفض التلاعب بالنص المشفر والـ Tag، رفض المفتاح الخاطئ، ودعم JSON و UTF-8.</p>
-          <p class="card-desc">• <strong>EcdhEngineTest (8/8):</strong> اتفاق طرفين مستقلين على نفس السر المشترك وتوليد مفاتيح جلسة متطابقة عبر HKDF.</p>
-          <p class="card-desc">• <strong>PeerSessionKeyManagerTest (4/4):</strong> صحة تخزين المفاتيح، انتهاء مهلة المصافحة (30 ثانية)، ومنع التراجع.</p>
-          <p class="card-desc">• <strong>HandshakeHardeningTest (8/8):</strong> التوقيع الرقمي المرتبط بالسياق ومطابقة بصمات TOFU.</p>
-        </div>
-
-        <div class="card" style="border-right: 4px solid var(--status-amber);">
-          <div class="card-title" style="color: #fbbf24;">⚠️ ما لم يتم التحقق منه ميدانياً بعد:</div>
-          <p class="card-desc">• <strong>الاتصال الميداني بين هاتفين حقيقيين:</strong> لم يُجرَ اختبار شبكي بين هاتفين فيزيائيين عبر راوتر Wi-Fi فعلي.</p>
-          <p class="card-desc">• <strong>اختبارات Android Instrumented:</strong> لم تُنفذ على محاكي أندرويد لعدم توفر بيئة عتادية في مرحلة الفحص.</p>
-          <p class="card-desc">• <strong>تكامل العتاد الحقيقي:</strong> التحقق من تخزين Keystore داخل معالج TEE يتطلب جهازاً فيزيائياً متاحاً.</p>
-          <p class="card-desc">• <strong>التغطية الشاملة لجميع المتطلبات:</strong> الاختبارات غطت وحدات التشفير والمصافحة فقط وليس كافة الـ 31 متطلباً.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== الشريحة 12 ==================== -->
-  <section class="slide" id="slide-12" data-notes="اختم العرض بقوة وبأمانة علمية تامة: لخّص الفجوات المتبقية والموثقة كخارطة طريق مستقبلية: 1- التحقق اليدوي SAS لمنع MITM في أول اتصال. 2- Replay Protection كامل بأرقام تسلسلية للحزم. 3- فحص سلامة الملف كاملاً SHA-256. 4- Group Keys للغرف. اختم بالتأكيد على أن المشروع انتقل من كود أولي بمفتاح ثابت إلى بنية هندسية رصينة موثقة ومختبرة وقابلة للتطوير المستمر.">
-    <div class="slide-header">
-      <div class="slide-title-wrap">
-        <div class="slide-category">الأمانة الأكاديمية وخارطة الطريق</div>
-        <h2 class="slide-title">الفجوات الأمنية المتبقية والتحسينات المستقبلية</h2>
-        <div class="slide-subtitle">الاعتراف العلمي بالحدود الحالية وتحديد أولويات التطوير للمرحلة القادمة</div>
-      </div>
-      <div class="status-tag status-missing">ROADMAP &amp; FUTURE WORK</div>
-    </div>
-
-    <div class="slide-body">
-      <div class="grid-4">
-        <div class="card">
-          <div class="card-title" style="color: #f87171;">1. قناة التحقق SAS</div>
-          <p class="card-desc">• مقارنة كود بصري أو صوتي (<span class="mono-term">Short Auth String</span>) أو مسح QR في أول لقاء لإغلاق ثغرة MITM الأولى نهائياً.</p>
-          <span class="status-tag status-missing" style="margin-top: 6px;">NOT IMPLEMENTED</span>
-        </div>
-
-        <div class="card">
-          <div class="card-title" style="color: #f87171;">2. حماية الـ Replay الكاملة</div>
-          <p class="card-desc">• إضافة أرقام تسلسلية (<span class="mono-term">Sequence Numbers</span>) مع نافذة منزلقة (Sliding Window) لرفض الحزم القديمة المكررة في الشبكة.</p>
-          <span class="status-tag status-missing" style="margin-top: 6px;">NOT IMPLEMENTED</span>
-        </div>
-
-        <div class="card">
-          <div class="card-title" style="color: #f87171;">3. فحص الملف الكامل</div>
-          <p class="card-desc">• حساب بصمة <span class="mono-term">SHA-256</span> لكامل الملف بعد اكتمال تجميع كتل .part للتأكد من سلامة المحتوى الإجمالي.</p>
-          <span class="status-tag status-missing" style="margin-top: 6px;">NOT IMPLEMENTED</span>
-        </div>
-
-        <div class="card">
-          <div class="card-title" style="color: #f87171;">4. مفاتيح المجموعات</div>
-          <p class="card-desc">• تطبيق بروتوكول شجرة المفاتيح (<span class="mono-term">Group Keys</span>) لتشفير الغرف الجماعية ومسارات بث الوسائط بمفاتيح ديناميكية.</p>
-          <span class="status-tag status-missing" style="margin-top: 6px;">NOT IMPLEMENTED</span>
-        </div>
-      </div>
-
-      <div class="card" style="background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.3); margin-top: 4px;">
-        <div class="card-title" style="color: #34d399;">🎓 الخلاصة الهندسية والتوصية الختامية:</div>
-        <p class="card-desc" style="color: #e2e8f0;">
-          تحول مشروع <strong>LOCAL CONTACT</strong> من تطبيق بسيط يعتمد على مفتاح ثابت مكشوف إلى <strong>نظام شبكي P2P مهيكل وفق أحدث مبادئ هندسة البرمجيات</strong> (SRS, Baseline, RTM) ومحصن بنواة تشفير معتمدة (AES-256-GCM, ECDH P-256, HKDF, Keystore, TOFU) مع مصفوفة تتبع صارمة تفصل بوضوح بين ما تم إثباته برمجياً وما يزال قيد التحسين المستقبلي.
-        </p>
-      </div>
-    </div>
-  </section>
-
-</main>
-
-<!-- Speaker Notes Slide-out Panel -->
-<div class="speaker-notes-panel" id="speakerNotesPanel">
-  <div class="notes-header">
-    <span>🎙️ ملاحظات المتحدث للمناقشة الشفوية أمام اللجنة (Speaker Notes):</span>
-  </div>
-  <div class="notes-content" id="notesText">
-    ملاحظات الشريحة الحالية...
-  </div>
-</div>
-
-<!-- Bottom Presentation Controls -->
-<footer class="bottom-bar">
-  <div style="display: flex; gap: 10px; align-items: center;">
-    <button class="nav-btn" id="prevBtn" onclick="changeSlide(-1)">❮ الشريحة السابقة</button>
-    <button class="nav-btn" id="nextBtn" onclick="changeSlide(1)">الشريحة التالية ❯</button>
-    <button class="nav-btn toggle-notes-btn" id="notesToggleBtn" onclick="toggleSpeakerNotes()">🎙️ ملاحظات المناقشة (N)</button>
-  </div>
-
-  <div class="keyboard-hint">
-    [ ◄ / ► : للتنقل ] &nbsp;|&nbsp; [ مسافة : تقدم ] &nbsp;|&nbsp; [ N : الملاحظات ] &nbsp;|&nbsp; [ F : ملء الشاشة ]
-  </div>
-
-  <div>
-    <button class="nav-btn" onclick="toggleFullscreen()">⛶ شاشة كاملة</button>
-  </div>
-</footer>
-
-<script>
-  let currentSlide = 1;
-  const totalSlides = 12;
-
-  function updateSlideView() {
-    // Update slides visibility
-    for (let i = 1; i <= totalSlides; i++) {
-      const slide = document.getElementById(`slide-${i}`);
-      if (slide) {
-        if (i === currentSlide) {
-          slide.classList.add('active');
-        } else {
-          slide.classList.remove('active');
+    function updateSlideView() {
+      // Update slides visibility
+      for (let i = 1; i <= totalSlides; i++) {
+        const slide = document.getElementById(`slide-${i}`);
+        if (slide) {
+          if (i === currentSlide) {
+            slide.classList.add('active');
+          } else {
+            slide.classList.remove('active');
+          }
         }
+      }
+
+      // Update progress and indicator
+      document.getElementById('slideIndicator').innerText = `${currentSlide} / ${totalSlides}`;
+      const progressPercent = (currentSlide / totalSlides) * 100;
+      document.getElementById('progressBar').style.width = `${progressPercent}%`;
+
+      // Update navigation buttons state
+      document.getElementById('prevBtn').disabled = (currentSlide === 1);
+      document.getElementById('nextBtn').disabled = (currentSlide === totalSlides);
+
+      // Update speaker notes content
+      const activeSlide = document.getElementById(`slide-${currentSlide}`);
+      if (activeSlide && activeSlide.dataset.notes) {
+        document.getElementById('notesText').innerText = activeSlide.dataset.notes;
+      } else {
+        document.getElementById('notesText').innerText = "لا توجد ملاحظات إضافية لهذه الشريحة.";
       }
     }
 
-    // Update progress and indicator
-    document.getElementById('slideIndicator').innerText = `${currentSlide} / ${totalSlides}`;
-    const progressPercent = (currentSlide / totalSlides) * 100;
-    document.getElementById('progressBar').style.width = `${progressPercent}%`;
-
-    // Update navigation buttons state
-    document.getElementById('prevBtn').disabled = (currentSlide === 1);
-    document.getElementById('nextBtn').disabled = (currentSlide === totalSlides);
-
-    // Update speaker notes content
-    const activeSlide = document.getElementById(`slide-${currentSlide}`);
-    if (activeSlide && activeSlide.dataset.notes) {
-      document.getElementById('notesText').innerText = activeSlide.dataset.notes;
-    } else {
-      document.getElementById('notesText').innerText = "لا توجد ملاحظات إضافية لهذه الشريحة.";
+    function changeSlide(direction) {
+      const next = currentSlide + direction;
+      if (next >= 1 && next <= totalSlides) {
+        currentSlide = next;
+        updateSlideView();
+      }
     }
-  }
 
-  function changeSlide(direction) {
-    const next = currentSlide + direction;
-    if (next >= 1 && next <= totalSlides) {
-      currentSlide = next;
-      updateSlideView();
+    function toggleSpeakerNotes() {
+      const panel = document.getElementById('speakerNotesPanel');
+      const btn = document.getElementById('notesToggleBtn');
+      panel.classList.toggle('visible');
+      btn.classList.toggle('active');
     }
-  }
 
-  function toggleSpeakerNotes() {
-    const panel = document.getElementById('speakerNotesPanel');
-    const btn = document.getElementById('notesToggleBtn');
-    panel.classList.toggle('visible');
-    btn.classList.toggle('active');
-  }
-
-  function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        alert(`تعذر تشغيل وضع ملء الشاشة: ${err.message}`);
-      });
-    } else {
-      document.exitFullscreen();
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+          alert(`تعذر تشغيل وضع ملء الشاشة: ${err.message}`);
+        });
+      } else {
+        document.exitFullscreen();
+      }
     }
-  }
 
-  // Keyboard Navigation
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft' || e.key === 'PageDown' || e.key === ' ') {
-      // In RTL, ArrowLeft moves forward to next slide
-      changeSlide(1);
-    } else if (e.key === 'ArrowRight' || e.key === 'PageUp') {
-      // In RTL, ArrowRight moves backward to previous slide
-      changeSlide(-1);
-    } else if (e.key === 'n' || e.key === 'N' || e.key === 'ى') {
-      toggleSpeakerNotes();
-    } else if (e.key === 'f' || e.key === 'F' || e.key === 'ب') {
-      toggleFullscreen();
-    } else if (e.key === 'Home') {
-      currentSlide = 1;
-      updateSlideView();
-    } else if (e.key === 'End') {
-      currentSlide = totalSlides;
-      updateSlideView();
-    }
-  });
+    // Keyboard Navigation
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft' || e.key === 'PageDown' || e.key === ' ') {
+        // In RTL, ArrowLeft moves forward to next slide
+        changeSlide(1);
+      } else if (e.key === 'ArrowRight' || e.key === 'PageUp') {
+        // In RTL, ArrowRight moves backward to previous slide
+        changeSlide(-1);
+      } else if (e.key === 'n' || e.key === 'N' || e.key === 'ى') {
+        toggleSpeakerNotes();
+      } else if (e.key === 'f' || e.key === 'F' || e.key === 'ب') {
+        toggleFullscreen();
+      } else if (e.key === 'Home') {
+        currentSlide = 1;
+        updateSlideView();
+      } else if (e.key === 'End') {
+        currentSlide = totalSlides;
+        updateSlideView();
+      }
+    });
 
-  // Initialize
-  updateSlideView();
-</script>
+    // Initialize
+    updateSlideView();
+  </script>
 </body>
+
 </html>
